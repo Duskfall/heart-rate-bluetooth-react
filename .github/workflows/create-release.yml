@@ -14,6 +14,10 @@ on:
         options:
           - production
           - pre-release
+      release_notes:
+        description: 'Custom release notes (optional)'
+        required: false
+        type: string
 
 jobs:
   create-release:
@@ -39,6 +43,13 @@ jobs:
           
           # Create a dummy commit for testing
           echo "# Release v$VERSION" >> RELEASE_NOTES.md
+          
+          # If custom release notes were provided, add them
+          if [[ -n "${{ github.event.inputs.release_notes }}" ]]; then
+            echo "" >> RELEASE_NOTES.md
+            echo "${{ github.event.inputs.release_notes }}" >> RELEASE_NOTES.md
+          fi
+          
           git add RELEASE_NOTES.md
           git commit -m "chore: prepare release v$VERSION"
           
@@ -52,12 +63,28 @@ jobs:
           git tag $TAG
           git push origin $TAG
       
+      - name: Generate Previous Tag
+        id: prev_tag
+        run: |
+          CURRENT_TAG="v${{ github.event.inputs.version }}"
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "$CURRENT_TAG" | head -n 1)
+          echo "Found previous tag: $PREV_TAG"
+          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+      
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
+          body: |
+            ## Release v${{ github.event.inputs.version }}
+            
+            ${{ github.event.inputs.release_notes }}
+            
+            ### Changes since ${{ steps.prev_tag.outputs.prev_tag }}:
+            
+            ${{ github.event.inputs.release_notes != '' && github.event.inputs.release_notes || 'Automated release' }}
           generate_release_notes: true
           prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
         env:
