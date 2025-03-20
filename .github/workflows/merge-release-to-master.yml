@@ -18,29 +18,31 @@ jobs:
           
       - name: Find and merge release PR to master
         run: |
-          # Use a simpler approach to get PR numbers
-          ALL_PRS=$(gh pr list --base master --state open --json number,title,headRefName)
-          # Get all PR numbers
-          PR_NUMBERS=$(echo "$ALL_PRS" | jq -r '.[].number')
+          echo "Searching for release PRs targeting master branch..."
           
-          # Skip if no PRs found
-          if [ -z "$PR_NUMBERS" ]; then
+          # List all PRs as plain text (without JQ)
+          gh pr list --base master --state open --json number,headRefName,title --template \
+            '{{range .}}{{printf "%s|%s|%s\n" .number .headRefName .title}}{{end}}' > pr_list.txt
+          
+          # Check if file is empty
+          if [ ! -s pr_list.txt ]; then
             echo "No PRs found targeting master branch"
             exit 0
           fi
           
-          for PR_NUMBER in $PR_NUMBERS; do
-            # Get the PR details to check if it's a release PR
-            PR_DETAILS=$(gh pr view $PR_NUMBER --json headRefName,title)
-            HEAD_REF=$(echo "$PR_DETAILS" | jq -r '.headRefName')
-            PR_TITLE=$(echo "$PR_DETAILS" | jq -r '.title')
+          # Read the file line by line
+          cat pr_list.txt | while read line; do
+            PR_NUMBER=$(echo "$line" | cut -d'|' -f1)
+            HEAD_REF=$(echo "$line" | cut -d'|' -f2)
+            PR_TITLE=$(echo "$line" | cut -d'|' -f3)
             
-            # Check if this is a release PR
-            if [[ "$HEAD_REF" == release/* ]] || [[ "$PR_TITLE" == *release* ]]; then
+            # Check if this is a release PR using grep (no JQ)
+            if echo "$HEAD_REF" | grep -q "^release/"; then
               echo "Found release PR #$PR_NUMBER with branch $HEAD_REF and title '$PR_TITLE'"
               
-              # Check PR status (CI checks, approvals, etc.)
-              PR_STATUS=$(gh pr view $PR_NUMBER --json mergeStateStatus --jq '.mergeStateStatus')
+              # Check PR status without JQ
+              gh pr view "$PR_NUMBER" --json mergeStateStatus --template '{{.mergeStateStatus}}' > status.txt
+              PR_STATUS=$(cat status.txt)
               
               if [ "$PR_STATUS" = "BLOCKED" ]; then
                 echo "PR #$PR_NUMBER is blocked, skipping"
@@ -49,7 +51,26 @@ jobs:
               
               # Merge the PR
               echo "Merging PR #$PR_NUMBER to master..."
-              gh pr merge $PR_NUMBER --admin --merge --delete-branch
+              gh pr merge "$PR_NUMBER" --admin --merge --delete-branch
+              echo "Successfully merged PR #$PR_NUMBER to master"
+              
+              # Break after first successful merge to avoid conflicts
+              break
+            elif echo "$PR_TITLE" | grep -q -i "release"; then
+              echo "Found release PR #$PR_NUMBER with title '$PR_TITLE'"
+              
+              # Check PR status without JQ
+              gh pr view "$PR_NUMBER" --json mergeStateStatus --template '{{.mergeStateStatus}}' > status.txt
+              PR_STATUS=$(cat status.txt)
+              
+              if [ "$PR_STATUS" = "BLOCKED" ]; then
+                echo "PR #$PR_NUMBER is blocked, skipping"
+                continue
+              fi
+              
+              # Merge the PR
+              echo "Merging PR #$PR_NUMBER to master..."
+              gh pr merge "$PR_NUMBER" --admin --merge --delete-branch
               echo "Successfully merged PR #$PR_NUMBER to master"
               
               # Break after first successful merge to avoid conflicts
