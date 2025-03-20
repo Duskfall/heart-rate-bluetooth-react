@@ -26,3 +26,32 @@ adapter to 7-12 maximum connections. See more details here: https://github.com/s
 
 ## Many thanks to
 https://github.com/jakelear for helping me understand the process. It was a great start.
+
+## Release Process
+
+This repository includes automated GitHub Actions workflows for managing releases:
+
+### Creating a Release
+
+1. Go to GitHub Actions > Create Release > Run workflow
+2. Enter the version number (e.g., `1.0.0`)
+3. Select the release type (production or pre-release)
+4. Click "Run workflow"
+
+The workflow will:
+- Create a release branch
+- Generate a semantic version tag
+- Create a GitHub release with automated release notes
+- Open PRs to merge the release branch into develop and master
+
+### Setting Up for Development
+
+To set up the required branches for the release workflow, run:
+
+```bash
+bash .github/setup-branches.sh
+```
+
+This script will create the `master` and `develop` branches if they don't already exist, and add a test file for release testing.
+
+See `.github/workflows/README.md` for more details on the automated release process.
