@@ -55,17 +55,21 @@ jobs:
           LAST_MERGE_HASH=$(git log --merges -n 1 --format="%H")
           
           # Create custom release notes
+          {
+            echo "# Release v$VERSION"
+            echo ""
+            echo "Commits on $RELEASE_DATE"
+            
+            # Get all non-merge commits since the last merge
+            git log ${LAST_MERGE_HASH}..HEAD --no-merges --format="%s%n%an%n%an%ncommitted%n"
+          } > RELEASE_NOTES.txt
+          
+          cat RELEASE_NOTES.txt
+          
+          # Save release notes to be used in subsequent steps
+          RELEASE_NOTES="$(cat RELEASE_NOTES.txt)"
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "# Release v$VERSION" >> $GITHUB_ENV
-          echo "" >> $GITHUB_ENV
-          echo "Commits on $RELEASE_DATE" >> $GITHUB_ENV
-          
-          # Get all non-merge commits since the last merge
-          git log ${LAST_MERGE_HASH}..HEAD --no-merges --format="%s%n%an%n%an%ncommitted%n" | grep -v "^$" >> temp_commits.txt
-          
-          # Add commits to release notes
-          cat temp_commits.txt >> $GITHUB_ENV
-          
+          echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
       
       - name: Create GitHub Release
