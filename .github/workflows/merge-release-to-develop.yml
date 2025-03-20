@@ -1,0 +1,57 @@
+name: Merge Release to Develop
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every hour to check for pending release PRs
+    - cron: '0 * * * *'
+
+jobs:
+  merge-release-pr:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Find and merge release PR to develop
+        run: |
+          echo "Searching for release PRs targeting develop branch..."
+          
+          # List all PRs in a simple format
+          gh pr list --base develop --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
+          
+          if [ ! -s pr_list.txt ]; then
+            echo "No PRs found targeting develop branch"
+            exit 0
+          fi
+          
+          # Process each PR
+          while read PR_NUMBER HEAD_REF PR_TITLE; do
+            echo "Checking PR #$PR_NUMBER: $HEAD_REF - $PR_TITLE"
+            
+            # Simple grep check for release PRs
+            if [[ "$HEAD_REF" == release/* ]] || [[ "$PR_TITLE" == *release* ]]; then
+              echo "Found release PR #$PR_NUMBER"
+              
+              # Check if PR can be merged
+              PR_STATUS=$(gh pr view $PR_NUMBER --json mergeable --template "{{.mergeable}}")
+              
+              if [ "$PR_STATUS" != "true" ]; then
+                echo "PR #$PR_NUMBER cannot be merged, skipping"
+                continue
+              fi
+              
+              # Merge the PR
+              echo "Merging PR #$PR_NUMBER to develop..."
+              gh pr merge $PR_NUMBER --admin --merge --delete-branch
+              echo "Successfully merged PR #$PR_NUMBER to develop"
+              
+              # Break after first successful merge
+              break
+            fi
+          done < pr_list.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 

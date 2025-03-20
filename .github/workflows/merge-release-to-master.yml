@@ -1,0 +1,83 @@
+name: Merge Release to Master
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every hour to check for pending release PRs
+    - cron: '0 * * * *'
+
+jobs:
+  merge-release-pr:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Find and merge release PR to master
+        run: |
+          echo "Searching for release PRs targeting master branch..."
+          
+          # List all PRs as plain text (without JQ)
+          gh pr list --base master --state open --json number,headRefName,title --template \
+            '{{range .}}{{printf "%s|%s|%s\n" .number .headRefName .title}}{{end}}' > pr_list.txt
+          
+          # Check if file is empty
+          if [ ! -s pr_list.txt ]; then
+            echo "No PRs found targeting master branch"
+            exit 0
+          fi
+          
+          # Read the file line by line
+          cat pr_list.txt | while read line; do
+            PR_NUMBER=$(echo "$line" | cut -d'|' -f1)
+            HEAD_REF=$(echo "$line" | cut -d'|' -f2)
+            PR_TITLE=$(echo "$line" | cut -d'|' -f3)
+            
+            # Check if this is a release PR using grep (no JQ)
+            if echo "$HEAD_REF" | grep -q "^release/"; then
+              echo "Found release PR #$PR_NUMBER with branch $HEAD_REF and title '$PR_TITLE'"
+              
+              # Check PR status without JQ
+              gh pr view "$PR_NUMBER" --json mergeStateStatus --template '{{.mergeStateStatus}}' > status.txt
+              PR_STATUS=$(cat status.txt)
+              
+              if [ "$PR_STATUS" = "BLOCKED" ]; then
+                echo "PR #$PR_NUMBER is blocked, skipping"
+                continue
+              fi
+              
+              # Merge the PR
+              echo "Merging PR #$PR_NUMBER to master..."
+              gh pr merge "$PR_NUMBER" --admin --merge --delete-branch
+              echo "Successfully merged PR #$PR_NUMBER to master"
+              
+              # Break after first successful merge to avoid conflicts
+              break
+            elif echo "$PR_TITLE" | grep -q -i "release"; then
+              echo "Found release PR #$PR_NUMBER with title '$PR_TITLE'"
+              
+              # Check PR status without JQ
+              gh pr view "$PR_NUMBER" --json mergeStateStatus --template '{{.mergeStateStatus}}' > status.txt
+              PR_STATUS=$(cat status.txt)
+              
+              if [ "$PR_STATUS" = "BLOCKED" ]; then
+                echo "PR #$PR_NUMBER is blocked, skipping"
+                continue
+              fi
+              
+              # Merge the PR
+              echo "Merging PR #$PR_NUMBER to master..."
+              gh pr merge "$PR_NUMBER" --admin --merge --delete-branch
+              echo "Successfully merged PR #$PR_NUMBER to master"
+              
+              # Break after first successful merge to avoid conflicts
+              break
+            else
+              echo "PR #$PR_NUMBER is not a release PR, skipping"
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
