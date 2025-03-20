@@ -36,18 +36,40 @@ jobs:
             if [[ "$HEAD_REF" == release/* ]] || [[ "$PR_TITLE" == *release* ]]; then
               echo "Found release PR #$PR_NUMBER"
               
-              # Check if PR can be merged
-              PR_STATUS=$(gh pr view $PR_NUMBER --json mergeable --template "{{.mergeable}}")
+              # Get detailed PR info for debugging
+              echo "Getting PR details..."
+              gh pr view $PR_NUMBER --json mergeable,mergeStateStatus,reviewDecision,baseRefName,headRefName > pr_details.json
+              cat pr_details.json
               
-              if [ "$PR_STATUS" != "true" ]; then
-                echo "PR #$PR_NUMBER cannot be merged, skipping"
-                continue
+              # Check if PR can be merged
+              MERGEABLE=$(gh pr view $PR_NUMBER --json mergeable --template "{{.mergeable}}")
+              MERGE_STATE=$(gh pr view $PR_NUMBER --json mergeStateStatus --template "{{.mergeStateStatus}}")
+              
+              echo "PR #$PR_NUMBER mergeable status: $MERGEABLE"
+              echo "PR #$PR_NUMBER merge state: $MERGE_STATE"
+              
+              if [ "$MERGEABLE" != "true" ]; then
+                echo "PR #$PR_NUMBER cannot be merged due to mergeable status: $MERGEABLE"
+                
+                # Try to force merge anyway with --admin flag
+                echo "Attempting to force merge with admin privileges..."
+                if gh pr merge $PR_NUMBER --admin --merge; then
+                  echo "Successfully merged PR #$PR_NUMBER to develop using admin privileges"
+                  break
+                else
+                  echo "Failed to merge PR #$PR_NUMBER even with admin privileges. Skipping."
+                  continue
+                fi
               fi
               
               # Merge the PR
               echo "Merging PR #$PR_NUMBER to develop..."
-              gh pr merge $PR_NUMBER --admin --merge --delete-branch
-              echo "Successfully merged PR #$PR_NUMBER to develop"
+              if gh pr merge $PR_NUMBER --admin --merge; then
+                echo "Successfully merged PR #$PR_NUMBER to develop"
+                break
+              else
+                echo "Failed to merge PR #$PR_NUMBER. Skipping."
+              fi
               
               # Break after first successful merge
               break
