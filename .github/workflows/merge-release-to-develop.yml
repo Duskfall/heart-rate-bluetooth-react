@@ -18,35 +18,45 @@ jobs:
           
       - name: Find and merge release PR to develop
         run: |
-          # Find PRs targeting develop branch
-          RELEASE_PRS=$(gh pr list --base develop --state open --json number,title,headRefName)
+          # Use a simpler approach to get PR numbers
+          ALL_PRS=$(gh pr list --base develop --state open --json number,title,headRefName)
+          # Get all PR numbers
+          PR_NUMBERS=$(echo "$ALL_PRS" | jq -r '.[].number')
           
-          # Extract PR numbers for release branches using grep instead of jq
-          PR_NUMBERS=$(echo "$RELEASE_PRS" | jq -r '.[] | "\(.number)|\(.title)|\(.headRefName)"' | grep -E 'release|release/' | cut -d'|' -f1)
-          
+          # Skip if no PRs found
           if [ -z "$PR_NUMBERS" ]; then
-            echo "No release PRs found targeting develop branch"
+            echo "No PRs found targeting develop branch"
             exit 0
           fi
           
           for PR_NUMBER in $PR_NUMBERS; do
-            echo "Found release PR #$PR_NUMBER"
+            # Get the PR details to check if it's a release PR
+            PR_DETAILS=$(gh pr view $PR_NUMBER --json headRefName,title)
+            HEAD_REF=$(echo "$PR_DETAILS" | jq -r '.headRefName')
+            PR_TITLE=$(echo "$PR_DETAILS" | jq -r '.title')
             
-            # Check PR status (CI checks, approvals, etc.)
-            PR_STATUS=$(gh pr view $PR_NUMBER --json mergeStateStatus --jq '.mergeStateStatus')
-            
-            if [ "$PR_STATUS" = "BLOCKED" ]; then
-              echo "PR #$PR_NUMBER is blocked, skipping"
-              continue
+            # Check if this is a release PR
+            if [[ "$HEAD_REF" == release/* ]] || [[ "$PR_TITLE" == *release* ]]; then
+              echo "Found release PR #$PR_NUMBER with branch $HEAD_REF and title '$PR_TITLE'"
+              
+              # Check PR status (CI checks, approvals, etc.)
+              PR_STATUS=$(gh pr view $PR_NUMBER --json mergeStateStatus --jq '.mergeStateStatus')
+              
+              if [ "$PR_STATUS" = "BLOCKED" ]; then
+                echo "PR #$PR_NUMBER is blocked, skipping"
+                continue
+              fi
+              
+              # Merge the PR
+              echo "Merging PR #$PR_NUMBER to develop..."
+              gh pr merge $PR_NUMBER --admin --merge --delete-branch
+              echo "Successfully merged PR #$PR_NUMBER to develop"
+              
+              # Break after first successful merge to avoid conflicts
+              break
+            else
+              echo "PR #$PR_NUMBER is not a release PR, skipping"
             fi
-            
-            # Merge the PR
-            echo "Merging PR #$PR_NUMBER to develop..."
-            gh pr merge $PR_NUMBER --admin --merge --delete-branch
-            echo "Successfully merged PR #$PR_NUMBER to develop"
-            
-            # Break after first successful merge to avoid conflicts
-            break
           done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
