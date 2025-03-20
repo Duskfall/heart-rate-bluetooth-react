@@ -14,10 +14,6 @@ on:
         options:
           - production
           - pre-release
-      release_notes:
-        description: 'Custom release notes (optional)'
-        required: false
-        type: string
 
 jobs:
   create-release:
@@ -41,35 +37,40 @@ jobs:
           # Create and switch to the release branch
           git checkout -b $RELEASE_BRANCH
           
-          # Create a dummy commit for testing
-          echo "# Release v$VERSION" >> RELEASE_NOTES.md
-          
-          # If custom release notes were provided, add them
-          if [[ -n "${{ github.event.inputs.release_notes }}" ]]; then
-            echo "" >> RELEASE_NOTES.md
-            echo "${{ github.event.inputs.release_notes }}" >> RELEASE_NOTES.md
-          fi
-          
-          git add RELEASE_NOTES.md
+          # Create a reference file for the release version
+          echo "# Release v$VERSION" > VERSION.md
+          git add VERSION.md
           git commit -m "chore: prepare release v$VERSION"
           
           # Push the release branch
           git push origin $RELEASE_BRANCH
       
-      - name: Create tag
+      - name: Generate custom release notes
+        id: release_notes
         run: |
           VERSION=${{ github.event.inputs.version }}
-          TAG="v$VERSION"
-          git tag $TAG
-          git push origin $TAG
-      
-      - name: Generate Previous Tag
-        id: prev_tag
-        run: |
-          CURRENT_TAG="v${{ github.event.inputs.version }}"
-          PREV_TAG=$(git tag --sort=-creatordate | grep -v "$CURRENT_TAG" | head -n 1)
-          echo "Found previous tag: $PREV_TAG"
-          echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          RELEASE_DATE=$(date +"%b %d, %Y")
+          
+          # Find the most recent merge commit
+          LAST_MERGE_HASH=$(git log --merges -n 1 --format="%H")
+          
+          # Create custom release notes
+          {
+            echo "# Release v$VERSION"
+            echo ""
+            echo "Commits on $RELEASE_DATE"
+            
+            # Get all non-merge commits since the last merge
+            git log ${LAST_MERGE_HASH}..HEAD --no-merges --format="%s%n%an%n%an%ncommitted%n"
+          } > RELEASE_NOTES.txt
+          
+          cat RELEASE_NOTES.txt
+          
+          # Save release notes to be used in subsequent steps
+          RELEASE_NOTES="$(cat RELEASE_NOTES.txt)"
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "$RELEASE_NOTES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
       
       - name: Create GitHub Release
         id: create_release
@@ -77,15 +78,9 @@ jobs:
         with:
           tag_name: v${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
-          body: |
-            ## Release v${{ github.event.inputs.version }}
-            
-            ${{ github.event.inputs.release_notes }}
-            
-            ### Changes since ${{ steps.prev_tag.outputs.prev_tag }}:
-            
-            ${{ github.event.inputs.release_notes != '' && github.event.inputs.release_notes || 'Automated release' }}
-          generate_release_notes: true
+          body: ${{ env.RELEASE_NOTES }}
+          draft: false
+          generate_release_notes: false
           prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -95,11 +90,10 @@ jobs:
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
           
-          # GitHub CLI is pre-installed on GitHub-hosted runners
           # Create PR to develop
-          gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "Automated PR to merge release v$VERSION into develop branch"
+          gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}"
           
           # Create PR to master
-          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "Automated PR to merge release v$VERSION into master branch"
+          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "${{ env.RELEASE_NOTES }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
