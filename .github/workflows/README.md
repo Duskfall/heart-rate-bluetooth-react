@@ -41,8 +41,9 @@ This workflow automatically finds release PRs targeting the develop branch and m
 
 To test the complete release process:
 
-1. Run the "Create Release" workflow
-2. Once complete, manually run both merge workflows to merge the release PRs
+1. Run the setup script from the root directory: `./setup-branches.ps1`
+2. Run the "Create Release" workflow
+3. Once complete, manually run both merge workflows to merge the release PRs
 
 ## Requirements
 

@@ -18,8 +18,8 @@ jobs:
           
       - name: Find and merge release PR to master
         run: |
-          # Get list of open PRs targeting master branch with "release" in the title
-          RELEASE_PRS=$(gh pr list --base master --state open --json number,title,headRefName --jq '.[] | select(.title | contains("release") or .headRefName | startswith("release/")) | .number')
+          # Get list of open PRs targeting master branch with "release" in the title or branch name
+          RELEASE_PRS=$(gh pr list --base master --state open --json number,title,headRefName --jq '.[] | select((.title | contains("release")) or (.headRefName | startswith("release/"))) | .number')
           
           if [ -z "$RELEASE_PRS" ]; then
             echo "No release PRs found targeting master branch"

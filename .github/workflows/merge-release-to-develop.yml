@@ -18,8 +18,8 @@ jobs:
           
       - name: Find and merge release PR to develop
         run: |
-          # Get list of open PRs targeting develop branch with "release" in the title
-          RELEASE_PRS=$(gh pr list --base develop --state open --json number,title,headRefName --jq '.[] | select(.title | contains("release") or .headRefName | startswith("release/")) | .number')
+          # Get list of open PRs targeting develop branch with "release" in the title or branch name
+          RELEASE_PRS=$(gh pr list --base develop --state open --json number,title,headRefName --jq '.[] | select((.title | contains("release")) or (.headRefName | startswith("release/"))) | .number')
           
           if [ -z "$RELEASE_PRS" ]; then
             echo "No release PRs found targeting develop branch"

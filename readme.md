@@ -48,8 +48,8 @@ The workflow will:
 
 To set up the required branches for the release workflow, run:
 
-```bash
-bash .github/setup-branches.sh
+```powershell
+./setup-branches.ps1
 ```
 
 This script will create the `master` and `develop` branches if they don't already exist, and add a test file for release testing.
