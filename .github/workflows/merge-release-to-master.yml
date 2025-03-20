@@ -48,7 +48,7 @@ jobs:
               echo "PR #$PR_NUMBER mergeable status: $MERGEABLE"
               echo "PR #$PR_NUMBER merge state: $MERGE_STATE"
               
-              if [ "$MERGEABLE" != "true" ]; then
+              if [ "$MERGEABLE" != "MERGEABLE" ]; then
                 echo "PR #$PR_NUMBER cannot be merged due to mergeable status: $MERGEABLE"
                 
                 # Try to force merge anyway with --admin flag
@@ -63,7 +63,7 @@ jobs:
               fi
               
               # Merge the PR
-              echo "Merging PR #$PR_NUMBER to master..."
+              echo "Merging PR #$PR_NUMBER to master normally..."
               if gh pr merge $PR_NUMBER --admin --merge; then
                 echo "Successfully merged PR #$PR_NUMBER to master"
                 break
