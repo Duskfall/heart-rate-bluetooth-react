@@ -1,0 +1,79 @@
+name: Merge Release to Target Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Target branch for merge'
+        required: true
+        type: choice
+        options:
+          - develop
+          - master
+
+jobs:
+  merge-release-pr:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Determine target branch
+        id: determine_branch
+        run: |
+          if [ -n "${{ github.event.inputs.target_branch }}" ]; then
+            echo "TARGET_BRANCH=${{ github.event.inputs.target_branch }}" >> $GITHUB_ENV
+          else
+            # For scheduled runs, run the job twice - once for each branch
+            echo "TARGET_BRANCH=develop" >> $GITHUB_ENV
+          fi
+      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Setup GitHub CLI
+        run: |
+          echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token
+          
+      - name: Find and merge release PR
+        run: |
+          TARGET_BRANCH="${TARGET_BRANCH:-develop}"
+          echo "Searching for release PRs targeting $TARGET_BRANCH branch..."
+          
+          # Find PRs with release in the title or head branch name targeting specified branch
+          RELEASE_PRS=$(gh pr list --base $TARGET_BRANCH --state open --search "release in:title,head" --json number,headRefName,title,mergeStateStatus,mergeable)
+          
+          # Check if any PRs were found
+          if [ "$(echo $RELEASE_PRS | jq length)" == "0" ]; then
+            echo "No release PRs found targeting $TARGET_BRANCH branch"
+            exit 0
+          fi
+          
+          # Process PRs - look for first mergeable one
+          echo $RELEASE_PRS | jq -c '.[]' | while read PR; do
+            PR_NUMBER=$(echo $PR | jq -r '.number')
+            HEAD_REF=$(echo $PR | jq -r '.headRefName')
+            PR_TITLE=$(echo $PR | jq -r '.title')
+            MERGEABLE=$(echo $PR | jq -r '.mergeable')
+            MERGE_STATE=$(echo $PR | jq -r '.mergeStateStatus')
+            
+            echo "Checking PR #$PR_NUMBER: $HEAD_REF - $PR_TITLE"
+            echo "PR #$PR_NUMBER mergeable status: $MERGEABLE"
+            echo "PR #$PR_NUMBER merge state: $MERGE_STATE"
+            
+            # If PR can be merged, merge it
+            if [ "$MERGEABLE" == "MERGEABLE" ] && [[ "$MERGE_STATE" == "CLEAN" || "$MERGE_STATE" == "UNSTABLE" ]]; then
+              echo "Merging PR #$PR_NUMBER..."
+              gh pr merge $PR_NUMBER --admin --merge
+              
+              echo "Successfully merged PR #$PR_NUMBER into $TARGET_BRANCH"
+              exit 0
+            else
+              echo "PR #$PR_NUMBER cannot be merged at this time. Skipping."
+            fi
+          done
+          
+          echo "No mergeable release PRs found for $TARGET_BRANCH."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_BRANCH: ${{ env.TARGET_BRANCH }}

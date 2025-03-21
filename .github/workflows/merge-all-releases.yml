@@ -1,0 +1,17 @@
+name: Merge All Release PRs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  merge-to-develop:
+    uses: ./.github/workflows/merge-release.yml
+    with:
+      target_branch: develop
+    secrets: inherit
+
+  merge-to-master:
+    uses: ./.github/workflows/merge-release.yml
+    with:
+      target_branch: master
+    secrets: inherit
