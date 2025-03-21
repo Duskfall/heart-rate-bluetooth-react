@@ -54,6 +54,30 @@ jobs:
           echo "Waiting for branch to be fully available (30 seconds)"
           sleep 30
           
+          # First, let's get detailed debugging info about our authentication and repository access
+          echo "--- DEBUGGING REPOSITORY ACCESS ---"
+          echo "Checking authentication:"
+          gh auth status || echo "Auth status command failed"
+          
+          echo "Checking permissions on repository:"
+          gh api /repos/${{ github.repository }} --jq '.permissions' || echo "Failed to check repo permissions"
+          
+          echo "Listing all files in repository root (default branch):"
+          gh api /repos/${{ github.repository }}/contents || echo "Failed to list repository contents"
+          
+          echo "Verifying release branch exists:"
+          gh api /repos/${{ github.repository }}/branches | grep $RELEASE_BRANCH || echo "Branch not found in API response"
+          
+          echo "Checking if we can create a test file in the repository:"
+          TEST_CONTENT=$(echo -n "Test file" | base64 -w 0)
+          TEST_RESULT=$(gh api \
+            --method PUT \
+            /repos/${{ github.repository }}/contents/test-file.txt \
+            -f message="Test file creation" \
+            -f content="$TEST_CONTENT" \
+            -f branch="$RELEASE_BRANCH" -s 2>&1)
+          echo "Test file creation result: $TEST_RESULT"
+          
           # Function to create or update VERSION.md with retry logic
           create_or_update_version_md() {
             local max_attempts=3
@@ -64,15 +88,16 @@ jobs:
               echo "Attempt $attempt of $max_attempts to create/update VERSION.md"
               
               # Check if VERSION.md exists in any branch (including refs like tags)
-              REF_INFO=$(gh api /repos/${{ github.repository }}/git/refs -s 2>/dev/null)
               echo "Searching for VERSION.md in repository history"
               
               # First try: Check if file exists in the release branch specifically
               echo "Checking for VERSION.md in release branch"
-              FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": ""}')
-              FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
+              FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>&1) 
+              echo "API response for VERSION.md in release branch: $FILE_INFO"
               
-              if [[ -n "$FILE_SHA" && "$FILE_SHA" != "null" ]]; then
+              if [[ $FILE_INFO == *"sha"* ]]; then
+                # Extract the SHA - using grep is more robust than jq for mixed output
+                FILE_SHA=$(echo "$FILE_INFO" | grep -o '"sha": "[^"]*"' | head -1 | cut -d'"' -f4)
                 echo "VERSION.md exists in release branch, updating with SHA: $FILE_SHA"
                 UPDATE_RESULT=$(gh api \
                   --method PUT \
@@ -80,22 +105,26 @@ jobs:
                   -f message="chore: prepare release v$VERSION" \
                   -f content="$ENCODED_CONTENT" \
                   -f sha="$FILE_SHA" \
-                  -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                  -f branch="$RELEASE_BRANCH" -s 2>&1)
                 
-                if [[ $(echo $UPDATE_RESULT | jq -r '.error') != "failed" ]]; then
+                echo "Update result: $UPDATE_RESULT"
+                
+                if [[ $UPDATE_RESULT == *"error"* || $UPDATE_RESULT == *"Not Found"* || $UPDATE_RESULT == *"Unprocessable"* ]]; then
+                  echo "Error updating VERSION.md with provided SHA"
+                else
                   echo "Successfully updated VERSION.md"
                   success=true
                   break
-                else
-                  echo "Error updating VERSION.md with provided SHA"
                 fi
               else
                 echo "VERSION.md not found in release branch, checking default branch"
                 # Check default branch
-                DEFAULT_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=${DEFAULT_BRANCH} -s 2>/dev/null || echo '{"sha": ""}')
-                DEFAULT_FILE_SHA=$(echo $DEFAULT_FILE_INFO | jq -r '.sha')
+                DEFAULT_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=${DEFAULT_BRANCH} -s 2>&1)
+                echo "API response for VERSION.md in default branch: $DEFAULT_FILE_INFO"
                 
-                if [[ -n "$DEFAULT_FILE_SHA" && "$DEFAULT_FILE_SHA" != "null" ]]; then
+                if [[ $DEFAULT_FILE_INFO == *"sha"* ]]; then
+                  # Extract the SHA
+                  DEFAULT_FILE_SHA=$(echo "$DEFAULT_FILE_INFO" | grep -o '"sha": "[^"]*"' | head -1 | cut -d'"' -f4)
                   echo "VERSION.md exists in default branch with SHA: $DEFAULT_FILE_SHA"
                   # Try to use this SHA for the update
                   UPDATE_RESULT=$(gh api \
@@ -104,14 +133,16 @@ jobs:
                     -f message="chore: prepare release v$VERSION" \
                     -f content="$ENCODED_CONTENT" \
                     -f sha="$DEFAULT_FILE_SHA" \
-                    -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                    -f branch="$RELEASE_BRANCH" -s 2>&1)
                   
-                  if [[ $(echo $UPDATE_RESULT | jq -r '.error') != "failed" ]]; then
+                  echo "Update result with default branch SHA: $UPDATE_RESULT"
+                  
+                  if [[ $UPDATE_RESULT == *"error"* || $UPDATE_RESULT == *"Not Found"* || $UPDATE_RESULT == *"Unprocessable"* ]]; then
+                    echo "Error updating VERSION.md with SHA from default branch"
+                  else
                     echo "Successfully updated VERSION.md using SHA from default branch"
                     success=true
                     break
-                  else
-                    echo "Error updating VERSION.md with SHA from default branch"
                   fi
                 else
                   echo "VERSION.md not found in default branch, trying to create it"
@@ -121,14 +152,16 @@ jobs:
                     /repos/${{ github.repository }}/contents/VERSION.md \
                     -f message="chore: prepare release v$VERSION" \
                     -f content="$ENCODED_CONTENT" \
-                    -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                    -f branch="$RELEASE_BRANCH" -s 2>&1)
                   
-                  if [[ $(echo $CREATE_RESULT | jq -r '.error') != "failed" ]]; then
+                  echo "Create result: $CREATE_RESULT"
+                  
+                  if [[ $CREATE_RESULT == *"error"* || $CREATE_RESULT == *"Not Found"* || $CREATE_RESULT == *"Unprocessable"* ]]; then
+                    echo "Error creating VERSION.md directly: $CREATE_RESULT"
+                  else
                     echo "Successfully created VERSION.md"
                     success=true
                     break
-                  else
-                    echo "Error creating VERSION.md directly, will try alternative approach"
                   fi
                 fi
               fi
@@ -142,14 +175,16 @@ jobs:
                   /repos/${{ github.repository }}/contents/$VERSION_PATH \
                   -f message="chore: prepare release v$VERSION" \
                   -f content="$ENCODED_CONTENT" \
-                  -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                  -f branch="$RELEASE_BRANCH" -s 2>&1)
                 
-                if [[ $(echo $VERSIONED_RESULT | jq -r '.error') != "failed" ]]; then
+                echo "Versioned path result: $VERSIONED_RESULT"
+                
+                if [[ $VERSIONED_RESULT == *"error"* || $VERSIONED_RESULT == *"Not Found"* || $VERSIONED_RESULT == *"Unprocessable"* ]]; then
+                  echo "Failed even with versioned path approach: $VERSIONED_RESULT"
+                else
                   echo "Created VERSION.md at alternate location: $VERSION_PATH"
                   success=true
                   break
-                else
-                  echo "Failed even with versioned path approach"
                 fi
               fi
               
@@ -165,7 +200,27 @@ jobs:
             if [[ "$success" = "true" ]]; then
               return 0
             else
-              return 1
+              # As absolute last resort, try a different approach using Git
+              echo "EMERGENCY FALLBACK: Trying direct file creation via Git commands"
+              # Create the file directly in the checkout
+              echo -e "# Release v$VERSION\n\nThis file contains the current release version of the project." > VERSION.md
+              
+              # Configure Git identity
+              git config --global user.name "github-actions"
+              git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              
+              # Commit and push the file
+              git add VERSION.md
+              git commit -m "chore: prepare release v$VERSION"
+              git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git $RELEASE_BRANCH
+              
+              if [ $? -eq 0 ]; then
+                echo "Successfully created VERSION.md using Git commands"
+                return 0
+              else
+                echo "ALL METHODS FAILED - VERSION.md was not created"
+                return 1
+              fi
             fi
           }
           
