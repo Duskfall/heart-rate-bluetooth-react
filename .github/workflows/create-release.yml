@@ -33,42 +33,66 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use PAT instead of GITHUB_TOKEN for better permissions
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      # Set up GitHub CLI with explicit token
       - name: Set up GitHub CLI
         run: |
           echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token
           gh auth status
       
-      - name: Create release branch and VERSION.md file directly
+      - name: Create release branch and VERSION.md file via API
         id: create_branch
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
           echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
           
-          echo "Getting the latest commit SHA from the default branch"
+          # Get default branch and its SHA
           DEFAULT_BRANCH=$(gh api /repos/${{ github.repository }} --jq '.default_branch')
+          DEFAULT_BRANCH_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/${DEFAULT_BRANCH} --jq '.object.sha')
           
-          # First create the branch using Git commands directly
-          git config --global user.name "github-actions"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "Default branch: $DEFAULT_BRANCH, SHA: $DEFAULT_BRANCH_SHA"
           
-          # Fetch the latest from remote
-          git fetch origin
+          # Create release branch using GitHub API
+          echo "Creating release branch $RELEASE_BRANCH"
+          gh api \
+            --method POST \
+            /repos/${{ github.repository }}/git/refs \
+            -f ref="refs/heads/$RELEASE_BRANCH" \
+            -f sha="$DEFAULT_BRANCH_SHA"
           
-          # Create the release branch from the default branch
-          git checkout -b $RELEASE_BRANCH origin/$DEFAULT_BRANCH
+          # Creating VERSION.md content
+          VERSION_CONTENT="# Release v$VERSION\n\nThis file contains the current release version of the project."
+          ENCODED_CONTENT=$(echo -n "$VERSION_CONTENT" | base64 -w 0)
           
-          # Create VERSION.md directly using Git
-          echo -e "# Release v$VERSION\n\nThis file contains the current release version of the project." > VERSION.md
-          git add VERSION.md
-          git commit -m "chore: prepare release v$VERSION"
+          # Check if VERSION.md exists in the new branch
+          FILE_EXISTS_CODE=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
           
-          # Push using the token for authentication
-          git push -u origin $RELEASE_BRANCH
+          if [ "$FILE_EXISTS_CODE" != "404" ]; then
+            # If file exists, get its SHA
+            echo "VERSION.md exists, retrieving SHA"
+            FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH)
+            FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
+            
+            # Update the file with SHA
+            echo "Updating VERSION.md with SHA: $FILE_SHA"
+            gh api \
+              --method PUT \
+              /repos/${{ github.repository }}/contents/VERSION.md \
+              -f message="chore: prepare release v$VERSION" \
+              -f content="$ENCODED_CONTENT" \
+              -f sha="$FILE_SHA" \
+              -f branch="$RELEASE_BRANCH"
+          else
+            # Create new file
+            echo "Creating new VERSION.md file"
+            gh api \
+              --method PUT \
+              /repos/${{ github.repository }}/contents/VERSION.md \
+              -f message="chore: prepare release v$VERSION" \
+              -f content="$ENCODED_CONTENT" \
+              -f branch="$RELEASE_BRANCH"
+          fi
           
           echo "Release branch $RELEASE_BRANCH created and VERSION.md added"
         env:
