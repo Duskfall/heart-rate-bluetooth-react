@@ -51,50 +51,27 @@ jobs:
           VERSION_CONTENT="# Release v$VERSION"
           ENCODED_CONTENT=$(echo -n "$VERSION_CONTENT" | base64 -w 0)
           
-          echo "Attempting to create VERSION.md in the release branch"
-          # Try direct creation first - this may fail with 422 if file exists
-          CREATION_RESULT=$(gh api \
+          # Use a versioned path to avoid SHA conflicts altogether
+          VERSION_PATH="releases/v$VERSION/VERSION.md"
+          
+          echo "Creating $VERSION_PATH in the release branch"
+          
+          # First, create the directory structure if needed
+          RELEASE_DIR_CONTENT="{\"message\":\"Create releases directory for v$VERSION\",\"content\":\"ICBWZXJzaW9uIGRpcmVjdG9yeQo=\",\"branch\":\"$RELEASE_BRANCH\"}"
+          
+          # Try to create directory first (this might fail if it already exists)
+          mkdir -p /tmp/release-structure
+          echo "Create directory structure for release"
+          
+          # Create the file using the API - this doesn't need SHA since it's a unique path
+          gh api \
             --method PUT \
-            /repos/${{ github.repository }}/contents/VERSION.md \
+            /repos/${{ github.repository }}/contents/$VERSION_PATH \
             -f message="chore: prepare release v$VERSION" \
             -f content="$ENCODED_CONTENT" \
-            -f branch="$RELEASE_BRANCH" \
-            -s 2>/dev/null || echo '{"status": "error"}')
+            -f branch="$RELEASE_BRANCH"
           
-          # Check if creation succeeded
-          if [[ $(echo $CREATION_RESULT | jq -r '.status // empty') == "error" ]]; then
-            echo "Direct creation failed. File might exist. Getting current file SHA..."
-            
-            # Get the SHA of the file in the default branch
-            FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md -s 2>/dev/null || echo '{"sha": ""}')
-            FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
-            
-            if [[ -z "$FILE_SHA" || "$FILE_SHA" == "null" ]]; then
-              echo "Could not get SHA from default branch. Trying release branch..."
-              
-              # Try getting SHA from the new branch 
-              BRANCH_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": ""}')
-              FILE_SHA=$(echo $BRANCH_FILE_INFO | jq -r '.sha')
-              
-              if [[ -z "$FILE_SHA" || "$FILE_SHA" == "null" ]]; then
-                echo "ERROR: Could not determine SHA for VERSION.md. Cannot proceed."
-                exit 1
-              fi
-            fi
-            
-            echo "Updating VERSION.md with SHA: $FILE_SHA"
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
-              -f content="$ENCODED_CONTENT" \
-              -f sha="$FILE_SHA" \
-              -f branch="$RELEASE_BRANCH"
-          else
-            echo "Successfully created VERSION.md in release branch"
-          fi
-          
-          echo "VERSION.md created/updated successfully in branch $RELEASE_BRANCH"
+          echo "VERSION.md created successfully at $VERSION_PATH in branch $RELEASE_BRANCH"
           
           # Checkout the release branch to continue with release notes etc.
           git fetch
