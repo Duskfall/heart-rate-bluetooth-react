@@ -31,23 +31,46 @@ jobs:
           
       - name: Create release branch
         run: |
-          VERSION=${{ github.event.inputs.version }}
-          RELEASE_BRANCH="release/v$VERSION"
-          
-          # Configure git with official GitHub Actions bot email
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          # Create and switch to the release branch
-          git checkout -b $RELEASE_BRANCH
-          
-          # Create a version file to have something to commit
+          # Set variables
+          RELEASE_BRANCH="release/v1.0"
+          VERSION="1.0"
+          BASE_BRANCH="main"
+
+          # Create the file
           echo "# Release v$VERSION" > VERSION.md
-          git add VERSION.md
-          git commit -m "chore: prepare release v$VERSION"
-          
-          # Push the release branch
-          git push origin $RELEASE_BRANCH
+
+          # Get the base branch's latest commit SHA
+          CURRENT_SHA=$(gh api /repos/${{ github.repository }}/git/ref/heads/$BASE_BRANCH --jq .object.sha)
+
+          # Create the new branch
+          gh api -X POST /repos/${{ github.repository }}/git/refs -f ref="refs/heads/$RELEASE_BRANCH" -f sha=$CURRENT_SHA
+
+          # Create a commit on the new branch using GraphQL
+          gh api graphql -f query='
+            mutation($input: CreateCommitOnBranchInput!) {
+              createCommitOnBranch(input: $input) {
+                commit {
+                  url
+                }
+              }
+            }
+          ' -f input='{
+            "branch": {
+              "repositoryNameWithOwner": "'${{ github.repository }}'",
+              "branchName": "'$RELEASE_BRANCH'"
+            },
+            "message": {
+              "headline": "chore: prepare release v'$VERSION'"
+            },
+            "fileChanges": {
+              "additions": [
+                {
+                  "path": "VERSION.md",
+                  "contents": "'$(base64 -w 0 VERSION.md)'"
+                }
+              ]
+            }
+          }'
       
       - name: Generate release notes
         id: release_notes
