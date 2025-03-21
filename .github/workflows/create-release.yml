@@ -45,7 +45,7 @@ jobs:
           # Push the release branch
           git push origin $RELEASE_BRANCH
       
-      - name: Generate custom release notes
+      - name: Generate release notes
         id: release_notes
         run: |
           VERSION=${{ github.event.inputs.version }}
@@ -72,28 +72,26 @@ jobs:
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
       
-      - name: Create GitHub Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: Release v${{ github.event.inputs.version }}
-          body: ${{ env.RELEASE_NOTES }}
-          draft: false
-          generate_release_notes: false
-          prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
       - name: Create PRs to develop and master
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
+          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           
           # Create PR to develop
           gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}"
           
-          # Create PR to master
-          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "${{ env.RELEASE_NOTES }}"
+          # Create PR to master with release info in the body
+          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "
+          # Release v$VERSION
+          
+          ${{ env.RELEASE_NOTES }}
+          
+          ---
+          
+          ## Release Metadata (for automation)
+          - release_type: $RELEASE_TYPE
+          - version: $VERSION
+          "
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

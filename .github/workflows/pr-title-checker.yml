@@ -1,0 +1,20 @@
+name: "Check PR Title Matches Standard"
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  main:
+    name: Check PR Title Matches Standard
+    runs-on: ubuntu-latest
+    steps:
+    - uses: deepakputhraya/action-pr-title@master
+      with:
+        regex: >
+          ^((Finishing release|Release) \d{4}\.\d{2}-([A-Za-z0-9\- '",_()[\].]+))$|^(build|chore|ci|docs|feat|fix|hotfix|perf|release|refactor|style|test): (EP(?:O)?-\d+): ([A-Za-z0-9\- '",_()[\].]+)$
+        min_length: 5
+        max_length: 200

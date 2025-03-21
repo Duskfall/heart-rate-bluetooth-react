@@ -5,9 +5,14 @@ on:
   schedule:
     # Run every hour to check for pending release PRs
     - cron: '0 * * * *'
+  pull_request:
+    types: [closed]
+    branches:
+      - master
 
 jobs:
   merge-release-pr:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/'))
     runs-on: ubuntu-latest
     
     steps:
@@ -16,7 +21,9 @@ jobs:
         with:
           fetch-depth: 0
           
+      # Only run this step for scheduled or manual triggers
       - name: Find and merge release PR to master
+        if: github.event_name != 'pull_request'
         run: |
           echo "Searching for release PRs targeting master branch..."
           
@@ -66,6 +73,10 @@ jobs:
               echo "Merging PR #$PR_NUMBER to master normally..."
               if gh pr merge $PR_NUMBER --admin --merge; then
                 echo "Successfully merged PR #$PR_NUMBER to master"
+                
+                # Save the PR number for later use
+                echo "MERGED_PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+                echo "MERGED_PR_HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
                 break
               else
                 echo "Failed to merge PR #$PR_NUMBER. Skipping."
@@ -76,4 +87,113 @@ jobs:
             fi
           done < pr_list.txt
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Create tag and release based on the merge
+      - name: Extract release information
+        id: extract_info
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For pull request events, extract from the PR body
+            PR_BODY="${{ github.event.pull_request.body }}"
+            VERSION=$(echo "$PR_BODY" | grep -oP "- version: \K.*" || echo "")
+            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP "- release_type: \K.*" || echo "production")
+            
+            # Extract release notes
+            RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
+          else
+            # For scheduled or manual triggers, extract from the merged PR
+            if [ -n "$MERGED_PR_NUMBER" ] && [ -n "$MERGED_PR_HEAD_REF" ]; then
+              # Use the PR we just merged
+              PR_NUMBER=$MERGED_PR_NUMBER
+              HEAD_REF=$MERGED_PR_HEAD_REF
+              
+              # Extract version from branch name
+              VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
+              
+              # Get PR body
+              PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
+            else
+              # Find the most recently merged release PR
+              MERGED_PR=$(gh pr list --state merged --base master --json number,headRefName,title,mergedAt --template '{{range .}}{{.mergedAt}} {{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' | grep -E 'release/' | sort -r | head -n 1)
+              
+              if [ -z "$MERGED_PR" ]; then
+                echo "No merged release PRs found"
+                exit 0
+              fi
+              
+              PR_NUMBER=$(echo "$MERGED_PR" | awk '{print $2}')
+              HEAD_REF=$(echo "$MERGED_PR" | awk '{print $3}')
+              
+              # Extract version from branch name
+              VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
+              
+              # Get PR body
+              PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
+            fi
+            
+            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP "- release_type: \K.*" || echo "production")
+            
+            # Extract release notes
+            RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
+            
+            # If version is still empty, try to extract directly from branch name
+            if [ -z "$VERSION" ] && [[ "$HEAD_REF" =~ release/v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+              echo "Extracted version $VERSION from branch name $HEAD_REF"
+            fi
+          fi
+          
+          # Debug information
+          echo "PR Number: $PR_NUMBER"
+          echo "Head Ref: $HEAD_REF"
+          echo "Extracted Version: $VERSION"
+          echo "Release Type: $RELEASE_TYPE"
+          
+          # Output for next steps
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+          
+          # Save release notes to be used in subsequent steps
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "$RELEASE_NOTES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          echo "Processing release v$VERSION ($RELEASE_TYPE)"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Create tag
+        run: |
+          VERSION="${{ steps.extract_info.outputs.version }}"
+          
+          if [ -z "$VERSION" ]; then
+            echo "No version found, cannot create tag"
+            exit 1
+          fi
+          
+          # Configure git
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          
+          # Check if tag already exists
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists, skipping tag creation"
+          else
+            # Create and push tag
+            git tag -a "v$VERSION" -m "Release v$VERSION"
+            git push origin "v$VERSION"
+          fi
+      
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.extract_info.outputs.version }}
+          name: Release v${{ steps.extract_info.outputs.version }}
+          body: ${{ env.RELEASE_NOTES }}
+          draft: false
+          generate_release_notes: false
+          prerelease: ${{ steps.extract_info.outputs.release_type == 'pre-release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
