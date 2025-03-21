@@ -51,8 +51,8 @@ jobs:
           VERSION_CONTENT="# Release v$VERSION\n\nThis file contains the current release version of the project."
           ENCODED_CONTENT=$(echo -n "$VERSION_CONTENT" | base64 -w 0)
           
-          echo "Waiting for branch to be fully available (3 seconds)"
-          sleep 3
+          echo "Waiting for branch to be fully available (10 seconds)"
+          sleep 10
           
           echo "Checking if VERSION.md exists in the repository history"
           
