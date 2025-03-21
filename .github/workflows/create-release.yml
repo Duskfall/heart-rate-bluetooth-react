@@ -46,6 +46,8 @@ jobs:
             -f message="chore: prepare release v$VERSION" \
             -f content="$CONTENT" \
             -f branch="$RELEASE_BRANCH"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Generate release notes
         id: release_notes
