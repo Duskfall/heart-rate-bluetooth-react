@@ -46,16 +46,35 @@ jobs:
           git fetch
           git checkout $RELEASE_BRANCH
           
-          # Create a reference file for the release version
-          echo "# Release v$VERSION" > VERSION.md
+          # Create VERSION.md file content
+          VERSION_CONTENT="# Release v$VERSION"
           
-          # Commit using GitHub API to ensure verified commits
-          gh api \
-            --method PUT \
-            /repos/${{ github.repository }}/contents/VERSION.md \
-            -f message="chore: prepare release v$VERSION" \
-            -f content="$(echo -n "# Release v$VERSION" | base64)" \
-            -f branch="$RELEASE_BRANCH"
+          # Check if VERSION.md already exists and get its SHA if it does
+          FILE_EXISTS=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo "not_found")
+          
+          if [[ $FILE_EXISTS != "not_found" ]]; then
+            # File exists, extract SHA
+            FILE_SHA=$(echo $FILE_EXISTS | jq -r .sha)
+            echo "Updating existing VERSION.md file with SHA: $FILE_SHA"
+            
+            # Update file with SHA
+            gh api \
+              --method PUT \
+              /repos/${{ github.repository }}/contents/VERSION.md \
+              -f message="chore: prepare release v$VERSION" \
+              -f content="$(echo -n "$VERSION_CONTENT" | base64 -w 0)" \
+              -f sha="$FILE_SHA" \
+              -f branch="$RELEASE_BRANCH"
+          else
+            echo "Creating new VERSION.md file"
+            # Create file (no SHA needed)
+            gh api \
+              --method PUT \
+              /repos/${{ github.repository }}/contents/VERSION.md \
+              -f message="chore: prepare release v$VERSION" \
+              -f content="$(echo -n "$VERSION_CONTENT" | base64 -w 0)" \
+              -f branch="$RELEASE_BRANCH"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
