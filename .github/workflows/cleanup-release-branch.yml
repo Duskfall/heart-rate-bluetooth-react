@@ -1,0 +1,62 @@
+name: Cleanup Release Branch
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - develop
+      - master
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/v')
+    permissions:
+      contents: write
+      pull-requests: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+      
+      - name: Check for related PRs
+        id: check_prs
+        run: |
+          # Extract the release branch name
+          RELEASE_BRANCH="${{ github.event.pull_request.head.ref }}"
+          RELEASE_VERSION="${RELEASE_BRANCH#release/v}"
+          echo "Release branch: $RELEASE_BRANCH"
+          echo "Release version: $RELEASE_VERSION"
+          
+          # Check if we merged to develop
+          DEVELOP_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:develop is:closed is:merged" --json number -q 'length')
+          echo "develop_merged=$DEVELOP_MERGED" >> $GITHUB_OUTPUT
+          
+          # Check if we merged to master
+          MASTER_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:master is:closed is:merged" --json number -q 'length')
+          echo "master_merged=$MASTER_MERGED" >> $GITHUB_OUTPUT
+          
+          echo "Develop merged: $DEVELOP_MERGED, Master merged: $MASTER_MERGED"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Delete release branch
+        if: steps.check_prs.outputs.develop_merged != '0' && steps.check_prs.outputs.master_merged != '0'
+        run: |
+          RELEASE_BRANCH="${{ github.event.pull_request.head.ref }}"
+          echo "Both PRs have been merged. Deleting release branch: $RELEASE_BRANCH"
+          
+          # Delete the remote branch
+          git push origin --delete $RELEASE_BRANCH
+          
+          echo "🧹 Release branch $RELEASE_BRANCH has been deleted"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 

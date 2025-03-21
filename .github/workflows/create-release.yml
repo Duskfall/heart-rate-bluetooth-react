@@ -18,21 +18,25 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Create release branch
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
           
-          # Configure git
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
+          # Configure git with GitHub's token for signed commits
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
           # Create and switch to the release branch
           git checkout -b $RELEASE_BRANCH
@@ -40,7 +44,9 @@ jobs:
           # Create a reference file for the release version
           echo "# Release v$VERSION" > VERSION.md
           git add VERSION.md
-          git commit -m "chore: prepare release v$VERSION"
+          
+          # Commit with signed flag - GitHub will automatically sign this
+          git -c commit.gpgsign=true commit -m "chore: prepare release v$VERSION"
           
           # Push the release branch
           git push origin $RELEASE_BRANCH
