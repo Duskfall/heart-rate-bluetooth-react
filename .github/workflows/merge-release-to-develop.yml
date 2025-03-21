@@ -2,9 +2,6 @@ name: Merge Release to Develop
 
 on:
   workflow_dispatch:
-  schedule:
-    # Run every hour to check for pending release PRs
-    - cron: '0 * * * *'
 
 jobs:
   merge-release-pr:

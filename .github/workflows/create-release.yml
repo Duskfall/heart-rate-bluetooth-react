@@ -125,19 +125,6 @@ jobs:
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
       
-      - name: Create GitHub Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: Release v${{ github.event.inputs.version }}
-          body: ${{ env.RELEASE_NOTES }}
-          draft: false
-          generate_release_notes: false
-          prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
       - name: Create PRs to develop and master
         id: create_prs
         run: |
