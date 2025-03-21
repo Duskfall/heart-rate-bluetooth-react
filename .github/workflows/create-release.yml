@@ -29,73 +29,76 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Create release branch
+      - name: Create release branch and VERSION.md
         id: create_branch
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
           echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
           
-          echo "Creating release branch $RELEASE_BRANCH"
-          # Create release branch via API to ensure verified commits
+          echo "Getting the latest commit SHA from the default branch"
+          DEFAULT_BRANCH_SHA=$(gh api /repos/${{ github.repository }} --jq '.default_branch' | \
+            xargs -I{} gh api /repos/${{ github.repository }}/git/refs/heads/{} --jq '.object.sha')
+          
+          echo "Creating release branch $RELEASE_BRANCH via GitHub API"
           gh api \
             --method POST \
             /repos/${{ github.repository }}/git/refs \
             -f ref="refs/heads/$RELEASE_BRANCH" \
-            -f sha="${{ github.sha }}"
-          
-          git fetch
-          git checkout $RELEASE_BRANCH
+            -f sha="$DEFAULT_BRANCH_SHA"
           
           # Create VERSION.md file content
           VERSION_CONTENT="# Release v$VERSION"
+          ENCODED_CONTENT=$(echo -n "$VERSION_CONTENT" | base64 -w 0)
           
-          echo "Preparing to create/update VERSION.md"
+          echo "Attempting to create VERSION.md in the release branch"
+          # Try direct creation first - this may fail with 422 if file exists
+          CREATION_RESULT=$(gh api \
+            --method PUT \
+            /repos/${{ github.repository }}/contents/VERSION.md \
+            -f message="chore: prepare release v$VERSION" \
+            -f content="$ENCODED_CONTENT" \
+            -f branch="$RELEASE_BRANCH" \
+            -s 2>/dev/null || echo '{"status": "error"}')
           
-          # First try to get the file from the default branch (develop)
-          # GitHub may require SHA even for files in other branches
-          echo "Checking if VERSION.md exists in the default branch"
-          DEFAULT_BRANCH_FILE=$(gh api /repos/${{ github.repository }}/contents/VERSION.md -s 2>/dev/null || echo "not_found")
-          
-          if [[ $DEFAULT_BRANCH_FILE != "not_found" ]]; then
-            # File exists in default branch, use its SHA
-            DEFAULT_SHA=$(echo $DEFAULT_BRANCH_FILE | jq -r .sha)
-            echo "VERSION.md exists in default branch with SHA: $DEFAULT_SHA"
+          # Check if creation succeeded
+          if [[ $(echo $CREATION_RESULT | jq -r '.status // empty') == "error" ]]; then
+            echo "Direct creation failed. File might exist. Getting current file SHA..."
             
-            # Check if it also exists in our release branch
-            RELEASE_FILE=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo "not_found")
+            # Get the SHA of the file in the default branch
+            FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md -s 2>/dev/null || echo '{"sha": ""}')
+            FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
             
-            if [[ $RELEASE_FILE != "not_found" ]]; then
-              # File exists in release branch, use that SHA
-              FILE_SHA=$(echo $RELEASE_FILE | jq -r .sha)
-              echo "VERSION.md exists in release branch with SHA: $FILE_SHA"
-            else
-              # File doesn't exist in release branch, use SHA from default branch
-              FILE_SHA=$DEFAULT_SHA
-              echo "VERSION.md doesn't exist in release branch, using default branch SHA"
+            if [[ -z "$FILE_SHA" || "$FILE_SHA" == "null" ]]; then
+              echo "Could not get SHA from default branch. Trying release branch..."
+              
+              # Try getting SHA from the new branch 
+              BRANCH_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": ""}')
+              FILE_SHA=$(echo $BRANCH_FILE_INFO | jq -r '.sha')
+              
+              if [[ -z "$FILE_SHA" || "$FILE_SHA" == "null" ]]; then
+                echo "ERROR: Could not determine SHA for VERSION.md. Cannot proceed."
+                exit 1
+              fi
             fi
             
-            # Update file with SHA
             echo "Updating VERSION.md with SHA: $FILE_SHA"
             gh api \
               --method PUT \
               /repos/${{ github.repository }}/contents/VERSION.md \
               -f message="chore: prepare release v$VERSION" \
-              -f content="$(echo -n "$VERSION_CONTENT" | base64 -w 0)" \
+              -f content="$ENCODED_CONTENT" \
               -f sha="$FILE_SHA" \
               -f branch="$RELEASE_BRANCH"
           else
-            # File really doesn't exist anywhere
-            echo "VERSION.md does not exist in any branch, creating new file"
-            
-            # Create the file locally and commit it using git
-            echo "$VERSION_CONTENT" > VERSION.md
-            git add VERSION.md
-            git config user.name "github-actions"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "chore: prepare release v$VERSION"
-            git push origin $RELEASE_BRANCH
+            echo "Successfully created VERSION.md in release branch"
           fi
+          
+          echo "VERSION.md created/updated successfully in branch $RELEASE_BRANCH"
+          
+          # Checkout the release branch to continue with release notes etc.
+          git fetch
+          git checkout $RELEASE_BRANCH
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
