@@ -28,34 +28,36 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
       
-      - name: Set up Git committer identity
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
       - name: Create release branch
+        id: create_branch
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
+          echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
           
-          # Create and switch to the release branch
-          git checkout -b $RELEASE_BRANCH
+          # Create release branch via API to ensure verified commits
+          gh api \
+            --method POST \
+            /repos/${{ github.repository }}/git/refs \
+            -f ref="refs/heads/$RELEASE_BRANCH" \
+            -f sha="${{ github.sha }}"
+          
+          git fetch
+          git checkout $RELEASE_BRANCH
           
           # Create a reference file for the release version
           echo "# Release v$VERSION" > VERSION.md
-          git add VERSION.md
           
-          # Commit with verified signature
-          GIT_COMMITTER_NAME="github-actions" \
-          GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
-          GIT_AUTHOR_NAME="github-actions" \
-          GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
-          git commit -m "chore: prepare release v$VERSION"
-          
-          # Push the release branch
-          git push origin $RELEASE_BRANCH
+          # Commit using GitHub API to ensure verified commits
+          gh api \
+            --method PUT \
+            /repos/${{ github.repository }}/contents/VERSION.md \
+            -f message="chore: prepare release v$VERSION" \
+            -f content="$(echo -n "# Release v$VERSION" | base64)" \
+            -f branch="$RELEASE_BRANCH"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Generate release notes
         id: release_notes
@@ -101,7 +103,7 @@ jobs:
         id: create_prs
         run: |
           VERSION=${{ github.event.inputs.version }}
-          RELEASE_BRANCH="release/v$VERSION"
+          RELEASE_BRANCH="${{ steps.create_branch.outputs.release_branch }}"
           
           # Create PR to develop
           DEVELOP_PR_URL=$(gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}" --json url -q .url)

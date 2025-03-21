@@ -21,12 +21,6 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          persist-credentials: true
-      
-      - name: Setup Git
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
       
       - name: Check for related PRs
         id: check_prs
@@ -55,14 +49,10 @@ jobs:
           RELEASE_BRANCH="${{ github.event.pull_request.head.ref }}"
           echo "Both PRs have been merged. Deleting release branch: $RELEASE_BRANCH"
           
-          # Set environment variables for Git commit identity
-          export GIT_COMMITTER_NAME="github-actions"
-          export GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
-          export GIT_AUTHOR_NAME="github-actions"
-          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
-          
-          # Delete the remote branch
-          git push origin --delete $RELEASE_BRANCH
+          # Delete the remote branch using GitHub API
+          gh api \
+            --method DELETE \
+            /repos/${{ github.repository }}/git/refs/heads/$RELEASE_BRANCH
           
           echo "🧹 Release branch $RELEASE_BRANCH has been deleted"
         env:
