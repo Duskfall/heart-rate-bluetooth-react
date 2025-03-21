@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Create release branch and VERSION.md
+      - name: Create release branch and update VERSION.md
         id: create_branch
         run: |
           VERSION=${{ github.event.inputs.version }}
@@ -37,8 +37,8 @@ jobs:
           echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
           
           echo "Getting the latest commit SHA from the default branch"
-          DEFAULT_BRANCH_SHA=$(gh api /repos/${{ github.repository }} --jq '.default_branch' | \
-            xargs -I{} gh api /repos/${{ github.repository }}/git/refs/heads/{} --jq '.object.sha')
+          DEFAULT_BRANCH=$(gh api /repos/${{ github.repository }} --jq '.default_branch')
+          DEFAULT_BRANCH_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/${DEFAULT_BRANCH} --jq '.object.sha')
           
           echo "Creating release branch $RELEASE_BRANCH via GitHub API"
           gh api \
@@ -48,30 +48,37 @@ jobs:
             -f sha="$DEFAULT_BRANCH_SHA"
           
           # Create VERSION.md file content
-          VERSION_CONTENT="# Release v$VERSION"
+          VERSION_CONTENT="# Release v$VERSION\n\nThis file contains the current release version of the project."
           ENCODED_CONTENT=$(echo -n "$VERSION_CONTENT" | base64 -w 0)
           
-          # Use a versioned path to avoid SHA conflicts altogether
-          VERSION_PATH="releases/v$VERSION/VERSION.md"
+          echo "Attempting to update VERSION.md in the release branch"
           
-          echo "Creating $VERSION_PATH in the release branch"
+          # Try to get the SHA of VERSION.md from the newly created branch
+          FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": "", "content": ""}')
+          FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
           
-          # First, create the directory structure if needed
-          RELEASE_DIR_CONTENT="{\"message\":\"Create releases directory for v$VERSION\",\"content\":\"ICBWZXJzaW9uIGRpcmVjdG9yeQo=\",\"branch\":\"$RELEASE_BRANCH\"}"
+          if [[ -z "$FILE_SHA" || "$FILE_SHA" == "null" ]]; then
+            # File doesn't exist, create it
+            echo "VERSION.md doesn't exist yet, creating it"
+            gh api \
+              --method PUT \
+              /repos/${{ github.repository }}/contents/VERSION.md \
+              -f message="chore: prepare release v$VERSION" \
+              -f content="$ENCODED_CONTENT" \
+              -f branch="$RELEASE_BRANCH"
+          else
+            # File exists, update it
+            echo "VERSION.md already exists, updating with SHA: $FILE_SHA"
+            gh api \
+              --method PUT \
+              /repos/${{ github.repository }}/contents/VERSION.md \
+              -f message="chore: prepare release v$VERSION" \
+              -f content="$ENCODED_CONTENT" \
+              -f sha="$FILE_SHA" \
+              -f branch="$RELEASE_BRANCH"
+          fi
           
-          # Try to create directory first (this might fail if it already exists)
-          mkdir -p /tmp/release-structure
-          echo "Create directory structure for release"
-          
-          # Create the file using the API - this doesn't need SHA since it's a unique path
-          gh api \
-            --method PUT \
-            /repos/${{ github.repository }}/contents/$VERSION_PATH \
-            -f message="chore: prepare release v$VERSION" \
-            -f content="$ENCODED_CONTENT" \
-            -f branch="$RELEASE_BRANCH"
-          
-          echo "VERSION.md created successfully at $VERSION_PATH in branch $RELEASE_BRANCH"
+          echo "VERSION.md created/updated successfully in branch $RELEASE_BRANCH"
           
           # Checkout the release branch to continue with release notes etc.
           git fetch
