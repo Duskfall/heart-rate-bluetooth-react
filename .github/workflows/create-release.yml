@@ -54,91 +54,128 @@ jobs:
           echo "Waiting for branch to be fully available (10 seconds)"
           sleep 10
           
-          echo "Checking if VERSION.md exists in the repository history"
-          
-          # First check if VERSION.md exists in the default branch
-          DEFAULT_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=${DEFAULT_BRANCH} -s 2>/dev/null || echo '{"sha": "", "content": ""}')
-          DEFAULT_FILE_SHA=$(echo $DEFAULT_FILE_INFO | jq -r '.sha')
-          
-          # Check for existing file in any branch (this API endpoint lists all branches containing a file)
-          BRANCHES_WITH_FILE=$(gh api /repos/${{ github.repository }}/contents?path=VERSION.md -s 2>/dev/null || echo '[]')
-          HAS_FILE_HISTORY=$(echo $BRANCHES_WITH_FILE | jq 'length > 0')
-          
-          if [[ -n "$DEFAULT_FILE_SHA" && "$DEFAULT_FILE_SHA" != "null" ]]; then
-            echo "VERSION.md exists in default branch, retrieving SHA for update"
+          # Function to create or update VERSION.md with retry logic
+          create_or_update_version_md() {
+            local max_attempts=3
+            local attempt=1
+            local success=false
             
-            # Give GitHub some time to propagate the branch
-            echo "Getting file SHA from release branch"
-            FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": "", "content": ""}')
-            FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
-            
-            if [[ -z "$FILE_SHA" || "$FILE_SHA" == "null" ]]; then
-              echo "Warning: VERSION.md exists in default branch but SHA not found in release branch"
-              echo "Using SHA from default branch as fallback: $DEFAULT_FILE_SHA"
-              FILE_SHA=$DEFAULT_FILE_SHA
-            fi
-            
-            echo "Updating VERSION.md in release branch with SHA: $FILE_SHA"
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
-              -f content="$ENCODED_CONTENT" \
-              -f sha="$FILE_SHA" \
-              -f branch="$RELEASE_BRANCH"
+            while [ $attempt -le $max_attempts ] && [ "$success" = "false" ]; do
+              echo "Attempt $attempt of $max_attempts to create/update VERSION.md"
               
-          elif [[ "$HAS_FILE_HISTORY" == "true" ]]; then
-            echo "VERSION.md exists in repository history but not in default branch"
-            # We need to find the SHA from somewhere
-            
-            # Try getting it from the release branch directly 
-            FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": "", "content": ""}')
-            FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
-            
-            if [[ -n "$FILE_SHA" && "$FILE_SHA" != "null" ]]; then
-              echo "Found VERSION.md SHA in release branch: $FILE_SHA"
-              gh api \
-                --method PUT \
-                /repos/${{ github.repository }}/contents/VERSION.md \
-                -f message="chore: prepare release v$VERSION" \
-                -f content="$ENCODED_CONTENT" \
-                -f sha="$FILE_SHA" \
-                -f branch="$RELEASE_BRANCH"
-            else
-              echo "VERSION.md exists in history but can't find SHA. Using versioned path instead."
-              # Use a versioned path to avoid SHA conflicts altogether
-              VERSION_PATH="releases/v$VERSION/VERSION.md"
-              echo "Creating $VERSION_PATH as alternate location"
-              gh api \
-                --method PUT \
-                /repos/${{ github.repository }}/contents/$VERSION_PATH \
-                -f message="chore: prepare release v$VERSION" \
-                -f content="$ENCODED_CONTENT" \
-                -f branch="$RELEASE_BRANCH"
-            fi
-          else
-            echo "VERSION.md doesn't exist in repository history, creating as new file"
-            # Try creating without SHA
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
-              -f content="$ENCODED_CONTENT" \
-              -f branch="$RELEASE_BRANCH" || {
-                # If that fails, use versioned path as last resort
-                echo "Error creating VERSION.md directly, using versioned path instead"
+              # Check if VERSION.md exists in any branch (including refs like tags)
+              REF_INFO=$(gh api /repos/${{ github.repository }}/git/refs -s 2>/dev/null)
+              echo "Searching for VERSION.md in repository history"
+              
+              # First try: Check if file exists in the release branch specifically
+              echo "Checking for VERSION.md in release branch"
+              FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s 2>/dev/null || echo '{"sha": ""}')
+              FILE_SHA=$(echo $FILE_INFO | jq -r '.sha')
+              
+              if [[ -n "$FILE_SHA" && "$FILE_SHA" != "null" ]]; then
+                echo "VERSION.md exists in release branch, updating with SHA: $FILE_SHA"
+                UPDATE_RESULT=$(gh api \
+                  --method PUT \
+                  /repos/${{ github.repository }}/contents/VERSION.md \
+                  -f message="chore: prepare release v$VERSION" \
+                  -f content="$ENCODED_CONTENT" \
+                  -f sha="$FILE_SHA" \
+                  -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                
+                if [[ $(echo $UPDATE_RESULT | jq -r '.error') != "failed" ]]; then
+                  echo "Successfully updated VERSION.md"
+                  success=true
+                  break
+                else
+                  echo "Error updating VERSION.md with provided SHA"
+                fi
+              else
+                echo "VERSION.md not found in release branch, checking default branch"
+                # Check default branch
+                DEFAULT_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=${DEFAULT_BRANCH} -s 2>/dev/null || echo '{"sha": ""}')
+                DEFAULT_FILE_SHA=$(echo $DEFAULT_FILE_INFO | jq -r '.sha')
+                
+                if [[ -n "$DEFAULT_FILE_SHA" && "$DEFAULT_FILE_SHA" != "null" ]]; then
+                  echo "VERSION.md exists in default branch with SHA: $DEFAULT_FILE_SHA"
+                  # Try to use this SHA for the update
+                  UPDATE_RESULT=$(gh api \
+                    --method PUT \
+                    /repos/${{ github.repository }}/contents/VERSION.md \
+                    -f message="chore: prepare release v$VERSION" \
+                    -f content="$ENCODED_CONTENT" \
+                    -f sha="$DEFAULT_FILE_SHA" \
+                    -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                  
+                  if [[ $(echo $UPDATE_RESULT | jq -r '.error') != "failed" ]]; then
+                    echo "Successfully updated VERSION.md using SHA from default branch"
+                    success=true
+                    break
+                  else
+                    echo "Error updating VERSION.md with SHA from default branch"
+                  fi
+                else
+                  echo "VERSION.md not found in default branch, trying to create it"
+                  # Try creating the file without SHA
+                  CREATE_RESULT=$(gh api \
+                    --method PUT \
+                    /repos/${{ github.repository }}/contents/VERSION.md \
+                    -f message="chore: prepare release v$VERSION" \
+                    -f content="$ENCODED_CONTENT" \
+                    -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                  
+                  if [[ $(echo $CREATE_RESULT | jq -r '.error') != "failed" ]]; then
+                    echo "Successfully created VERSION.md"
+                    success=true
+                    break
+                  else
+                    echo "Error creating VERSION.md directly, will try alternative approach"
+                  fi
+                fi
+              fi
+              
+              # If all the above fails, try with a versioned path as last resort
+              if [[ "$success" = "false" && $attempt -eq $max_attempts ]]; then
+                echo "All methods failed, using versioned path as last resort"
                 VERSION_PATH="releases/v$VERSION/VERSION.md"
-                gh api \
+                VERSIONED_RESULT=$(gh api \
                   --method PUT \
                   /repos/${{ github.repository }}/contents/$VERSION_PATH \
                   -f message="chore: prepare release v$VERSION" \
                   -f content="$ENCODED_CONTENT" \
-                  -f branch="$RELEASE_BRANCH"
-                echo "Created VERSION.md at alternate location: $VERSION_PATH"
-              }
-          fi
+                  -f branch="$RELEASE_BRANCH" -s 2>/dev/null || echo '{"error": "failed"}')
+                
+                if [[ $(echo $VERSIONED_RESULT | jq -r '.error') != "failed" ]]; then
+                  echo "Created VERSION.md at alternate location: $VERSION_PATH"
+                  success=true
+                  break
+                else
+                  echo "Failed even with versioned path approach"
+                fi
+              fi
+              
+              # Wait before retrying
+              if [ $attempt -lt $max_attempts ]; then
+                echo "Waiting before retry..."
+                sleep 5
+              fi
+              
+              ((attempt++))
+            done
+            
+            if [[ "$success" = "true" ]]; then
+              return 0
+            else
+              return 1
+            fi
+          }
           
-          echo "VERSION.md handling completed for branch $RELEASE_BRANCH"
+          # Call function with error handling
+          if create_or_update_version_md; then
+            echo "VERSION.md handling completed successfully"
+          else
+            echo "ERROR: Failed to create or update VERSION.md after multiple attempts"
+            echo "Continuing workflow but VERSION.md might not be updated correctly"
+          fi
           
           # Checkout the release branch to continue with release notes etc.
           git fetch
