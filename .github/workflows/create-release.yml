@@ -45,8 +45,8 @@ jobs:
           echo "# Release v$VERSION" > VERSION.md
           git add VERSION.md
           
-          # Commit with signed flag - GitHub will automatically sign this
-          git -c commit.gpgsign=true commit -m "chore: prepare release v$VERSION"
+          # Commit - GitHub will automatically verify this commit since we're using GITHUB_TOKEN
+          git commit -m "chore: prepare release v$VERSION"
           
           # Push the release branch
           git push origin $RELEASE_BRANCH
@@ -78,26 +78,34 @@ jobs:
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
       
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: Release v${{ github.event.inputs.version }}
+          body: ${{ env.RELEASE_NOTES }}
+          draft: false
+          generate_release_notes: false
+          prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
       - name: Create PRs to develop and master
+        id: create_prs
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
-          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           
           # Create PR to develop
-          gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}"
+          DEVELOP_PR_URL=$(gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}" --json url -q .url)
+          echo "DEVELOP_PR_URL=$DEVELOP_PR_URL" >> $GITHUB_OUTPUT
           
-          # Create PR to master with release info in the body
-          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "
-          # Release v$VERSION
+          # Create PR to master
+          MASTER_PR_URL=$(gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "${{ env.RELEASE_NOTES }}" --json url -q .url)
+          echo "MASTER_PR_URL=$MASTER_PR_URL" >> $GITHUB_OUTPUT
           
-          ${{ env.RELEASE_NOTES }}
-          
-          ---
-          
-          ## Release Metadata (for automation)
-          - release_type: $RELEASE_TYPE
-          - version: $VERSION
-          "
+          echo "Created PR to develop: $DEVELOP_PR_URL"
+          echo "Created PR to master: $MASTER_PR_URL"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
