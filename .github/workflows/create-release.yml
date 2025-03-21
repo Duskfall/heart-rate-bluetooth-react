@@ -29,17 +29,23 @@ jobs:
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
-          
-          # Create and switch to the release branch
-          git checkout -b $RELEASE_BRANCH
-          
-          # Create a reference file for the release version
+          BASE_BRANCH="main"
+
+          # Get the SHA of the base branch
+          SHA=$(gh api /repos/${{ github.repository }}/git/ref/heads/$BASE_BRANCH --jq .object.sha)
+
+          # Create the new branch on the remote repository
+          gh api -X POST /repos/${{ github.repository }}/git/refs -f ref="refs/heads/$RELEASE_BRANCH" -f sha=$SHA
+
+          # Create the VERSION.md file locally
           echo "# Release v$VERSION" > VERSION.md
-          git add VERSION.md
-          git commit -m "chore: prepare release v$VERSION"
-          
-          # Push the release branch
-          git push origin $RELEASE_BRANCH
+          CONTENT=$(base64 -w 0 VERSION.md)
+
+          # Create the commit on the release branch via API
+          gh api -X PUT /repos/${{ github.repository }}/contents/VERSION.md \
+            -f message="chore: prepare release v$VERSION" \
+            -f content="$CONTENT" \
+            -f branch="$RELEASE_BRANCH"
       
       - name: Generate release notes
         id: release_notes
