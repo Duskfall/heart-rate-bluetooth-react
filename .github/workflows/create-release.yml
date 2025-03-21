@@ -18,6 +18,10 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    # Add these permissions to enable automatic commit signing
+    permissions:
+      contents: write
+      pull-requests: write
     
     steps:
       - name: Checkout repository
@@ -30,14 +34,14 @@ jobs:
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
           
-          # Configure git
+          # Configure git with official GitHub Actions bot email
           git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           # Create and switch to the release branch
           git checkout -b $RELEASE_BRANCH
           
-          # Create a reference file for the release version
+          # Create a version file to have something to commit
           echo "# Release v$VERSION" > VERSION.md
           git add VERSION.md
           git commit -m "chore: prepare release v$VERSION"
@@ -72,7 +76,7 @@ jobs:
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
       
-      - name: Create PRs to develop and master
+      - name: Create PRs to develop and main
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="release/v$VERSION"
@@ -81,8 +85,8 @@ jobs:
           # Create PR to develop
           gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}"
           
-          # Create PR to master with release info in the body
-          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "
+          # Create PR to main with release info in the body
+          gh pr create --base main --head $RELEASE_BRANCH --title "Merge release v$VERSION into main" --body "
           # Release v$VERSION
           
           ${{ env.RELEASE_NOTES }}

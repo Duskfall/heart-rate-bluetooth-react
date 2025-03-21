@@ -2,9 +2,6 @@ name: Merge Release to Master
 
 on:
   workflow_dispatch:
-  schedule:
-    # Run every hour to check for pending release PRs
-    - cron: '0 * * * *'
   pull_request:
     types: [closed]
     branches:
