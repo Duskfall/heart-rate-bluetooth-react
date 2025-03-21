@@ -134,14 +134,53 @@ jobs:
             
             RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP "- release_type: \K.*" || echo "production")
             
-            # Extract release notes
-            RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
-            
             # If version is still empty, try to extract directly from branch name
             if [ -z "$VERSION" ] && [[ "$HEAD_REF" =~ release/v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
               VERSION="${BASH_REMATCH[1]}"
               echo "Extracted version $VERSION from branch name $HEAD_REF"
             fi
+            
+            # Generate custom release notes from git history
+            echo "# Release v$VERSION" > release_notes.md
+            echo "" >> release_notes.md
+            
+            # Get the previous tag for comparison
+            PREV_TAG=$(git tag --sort=-v:refname | head -n 1 || echo "")
+            
+            if [ -z "$PREV_TAG" ]; then
+              # No previous tag, get all commits
+              echo "No previous tag found, including all commits in release notes"
+              COMMITS=$(git log --pretty=format:"%h %s %b" -n 50)
+            else
+              # Get commits between previous tag and HEAD
+              echo "Generating release notes since tag $PREV_TAG"
+              COMMITS=$(git log "$PREV_TAG"..HEAD --pretty=format:"%h %s %b")
+            fi
+            
+            # Process commits to format release notes
+            echo "$COMMITS" | while read -r line; do
+              COMMIT_HASH=$(echo "$line" | cut -d ' ' -f 1)
+              COMMIT_MSG=$(echo "$line" | cut -d ' ' -f 2-)
+              
+              # Check if this is a PR merge commit
+              if [[ "$COMMIT_MSG" =~ Merge\ pull\ request\ #([0-9]+) ]]; then
+                PR_NUM="${BASH_REMATCH[1]}"
+                # Extract the actual commit message from the merge commit
+                PR_TITLE=$(gh pr view "$PR_NUM" --json title --template "{{.title}}" 2>/dev/null || echo "")
+                
+                if [ -n "$PR_TITLE" ]; then
+                  echo "- $PR_TITLE [#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)" >> release_notes.md
+                else
+                  # Fallback if we can't get the PR title
+                  echo "- $COMMIT_MSG [#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)" >> release_notes.md
+                fi
+              else
+                # Regular commit
+                echo "- $COMMIT_MSG" >> release_notes.md
+              fi
+            done
+            
+            RELEASE_NOTES=$(cat release_notes.md)
           fi
           
           # Debug information
