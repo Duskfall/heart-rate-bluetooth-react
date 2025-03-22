@@ -1,1 +1,1 @@
-# Release v1.0.7
+# Release v1.0.8\n\nThis file contains the current release version of the project.
