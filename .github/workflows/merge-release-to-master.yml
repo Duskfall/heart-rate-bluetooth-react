@@ -1,11 +1,11 @@
-name: Merge Release to Master
+name: Merge Release to Main
 
 on:
   workflow_dispatch:
   pull_request:
     types: [closed]
     branches:
-      - master
+      - main
 
 jobs:
   merge-release-pr:
@@ -19,16 +19,16 @@ jobs:
           fetch-depth: 0
           
       # Only run this step for scheduled or manual triggers
-      - name: Find and merge release PR to master
+      - name: Find and merge release PR to main
         if: github.event_name != 'pull_request'
         run: |
-          echo "Searching for release PRs targeting master branch..."
+          echo "Searching for release PRs targeting main branch..."
           
           # List all PRs in a simple format
-          gh pr list --base master --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
+          gh pr list --base main --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
           
           if [ ! -s pr_list.txt ]; then
-            echo "No PRs found targeting master branch"
+            echo "No PRs found targeting main branch"
             exit 0
           fi
           
@@ -58,7 +58,7 @@ jobs:
                 # Try to force merge anyway with --admin flag
                 echo "Attempting to force merge with admin privileges..."
                 if gh pr merge $PR_NUMBER --admin --merge; then
-                  echo "Successfully merged PR #$PR_NUMBER to master using admin privileges"
+                  echo "Successfully merged PR #$PR_NUMBER to main using admin privileges"
                   break
                 else
                   echo "Failed to merge PR #$PR_NUMBER even with admin privileges. Skipping."
@@ -67,9 +67,9 @@ jobs:
               fi
               
               # Merge the PR
-              echo "Merging PR #$PR_NUMBER to master normally..."
+              echo "Merging PR #$PR_NUMBER to main normally..."
               if gh pr merge $PR_NUMBER --admin --merge; then
-                echo "Successfully merged PR #$PR_NUMBER to master"
+                echo "Successfully merged PR #$PR_NUMBER to main"
                 
                 # Save the PR number for later use
                 echo "MERGED_PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
@@ -112,7 +112,7 @@ jobs:
               PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
             else
               # Find the most recently merged release PR
-              MERGED_PR=$(gh pr list --state merged --base master --json number,headRefName,title,mergedAt --template '{{range .}}{{.mergedAt}} {{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' | grep -E 'release/' | sort -r | head -n 1)
+              MERGED_PR=$(gh pr list --state merged --base main --json number,headRefName,title,mergedAt --template '{{range .}}{{.mergedAt}} {{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' | grep -E 'release/' | sort -r | head -n 1)
               
               if [ -z "$MERGED_PR" ]; then
                 echo "No merged release PRs found"
@@ -217,9 +217,9 @@ jobs:
             exit 0
           fi
           
-          # Get the latest commit SHA from the master branch
-          MASTER_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/master --jq '.object.sha')
-          echo "Master branch SHA: $MASTER_SHA"
+          # Get the latest commit SHA from the main branch
+          MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/main --jq '.object.sha')
+          echo "Main branch SHA: $MAIN_SHA"
           
           # First, create a tag object (this will be GPG signed by GitHub)
           echo "Creating tag object..."
@@ -228,7 +228,7 @@ jobs:
             /repos/${{ github.repository }}/git/tags \
             -f tag="$TAG_NAME" \
             -f message="Release $TAG_NAME" \
-            -f object="$MASTER_SHA" \
+            -f object="$MAIN_SHA" \
             -f type="commit")
           
           # Extract the SHA of the new tag object
