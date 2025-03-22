@@ -1,197 +1,43 @@
-name: Merge Release to Main
+name: Create Release from Main PR
 
 on:
-  workflow_dispatch:
   pull_request:
     types: [closed]
     branches:
       - main
 
 jobs:
-  merge-release-pr:
-    if: github.event_name != 'pull_request' || (github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/'))
+  create-release:
+    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
-      # Only run this step for scheduled or manual triggers
-      - name: Find and merge release PR to main
-        if: github.event_name != 'pull_request'
-        run: |
-          echo "Searching for release PRs targeting main branch..."
-          
-          # List all OPEN PRs in a simple format
-          gh pr list --base main --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
-          
-          if [ ! -s pr_list.txt ]; then
-            echo "No open PRs found targeting main branch"
-            exit 0
-          fi
-          
-          echo "Found the following open PRs targeting main branch:"
-          cat pr_list.txt
-          
-          # Process each PR
-          while read PR_NUMBER HEAD_REF PR_TITLE; do
-            echo "Checking PR #$PR_NUMBER: $HEAD_REF - $PR_TITLE"
-            
-            # Only process release PRs with clear pattern matching
-            if [[ "$HEAD_REF" == release/* ]]; then
-              echo "Found release PR #$PR_NUMBER with branch $HEAD_REF"
-              
-              # Get detailed PR info for debugging
-              echo "Getting PR details..."
-              gh pr view $PR_NUMBER --json mergeable,mergeStateStatus,reviewDecision,baseRefName,headRefName > pr_details.json
-              cat pr_details.json
-              
-              # Check if PR can be merged
-              MERGEABLE=$(gh pr view $PR_NUMBER --json mergeable --template "{{.mergeable}}")
-              MERGE_STATE=$(gh pr view $PR_NUMBER --json mergeStateStatus --template "{{.mergeStateStatus}}")
-              
-              echo "PR #$PR_NUMBER mergeable status: $MERGEABLE"
-              echo "PR #$PR_NUMBER merge state: $MERGE_STATE"
-              
-              if [ "$MERGEABLE" != "MERGEABLE" ]; then
-                echo "PR #$PR_NUMBER cannot be merged due to mergeable status: $MERGEABLE"
-                
-                # Try to force merge anyway with --admin flag
-                echo "Attempting to force merge with admin privileges..."
-                if gh pr merge $PR_NUMBER --admin --merge; then
-                  echo "Successfully merged PR #$PR_NUMBER to main using admin privileges"
-                  break
-                else
-                  echo "Failed to merge PR #$PR_NUMBER even with admin privileges. Skipping."
-                  continue
-                fi
-              fi
-              
-              # Merge the PR
-              echo "Merging PR #$PR_NUMBER to main normally..."
-              if gh pr merge $PR_NUMBER --admin --merge; then
-                echo "Successfully merged PR #$PR_NUMBER to main"
-                
-                # Save the PR number for later use
-                echo "MERGED_PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
-                echo "MERGED_PR_HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
-                break
-              else
-                echo "Failed to merge PR #$PR_NUMBER. Skipping."
-              fi
-              
-              # Break after first successful merge
-              break
-            fi
-          done < pr_list.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      # Create tag and release based on the merge
       - name: Extract release information
         id: extract_info
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            # For pull request events, extract from the PR body
-            PR_BODY="${{ github.event.pull_request.body }}"
-            VERSION=$(echo "$PR_BODY" | grep -oP -- "- version: \K[^\s]*" || echo "")
-            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
-            
-            # Extract release notes
-            RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
-          else
-            # For scheduled or manual triggers, extract from the merged PR
-            if [ -n "$MERGED_PR_NUMBER" ] && [ -n "$MERGED_PR_HEAD_REF" ]; then
-              # Use the PR we just merged
-              PR_NUMBER=$MERGED_PR_NUMBER
-              HEAD_REF=$MERGED_PR_HEAD_REF
-              
-              # Extract version from branch name
-              VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
-              
-              # Get PR body
-              PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
-            else
-              # Find the most recently merged release PR
-              MERGED_PR=$(gh pr list --state merged --base main --json number,headRefName,title,mergedAt --template '{{range .}}{{.mergedAt}} {{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' | grep -E 'release/' | sort -r | head -n 1)
-              
-              if [ -z "$MERGED_PR" ]; then
-                echo "No merged release PRs found"
-                exit 0
-              fi
-              
-              PR_NUMBER=$(echo "$MERGED_PR" | awk '{print $2}')
-              HEAD_REF=$(echo "$MERGED_PR" | awk '{print $3}')
-              
-              # Extract version from branch name
-              VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
-              
-              # Get PR body
-              PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
-            fi
-            
-            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
-            
-            # If version is still empty, try to extract directly from branch name
-            if [ -z "$VERSION" ] && [[ "$HEAD_REF" =~ release/v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-              VERSION="${BASH_REMATCH[1]}"
-              echo "Extracted version $VERSION from branch name $HEAD_REF"
-            fi
-            
-            # Generate custom release notes from git history
-            echo "# Release v$VERSION" > release_notes.md
-            echo "" >> release_notes.md
-            
-            # Get the previous tag for comparison
-            PREV_TAG=$(git tag --sort=-v:refname | head -n 1 || echo "")
-            
-            if [ -z "$PREV_TAG" ]; then
-              # No previous tag, get all commits
-              echo "No previous tag found, including all commits in release notes"
-              COMMITS=$(git log --pretty=format:"%h %s %b" -n 50)
-            else
-              # Get commits between previous tag and HEAD
-              echo "Generating release notes since tag $PREV_TAG"
-              COMMITS=$(git log "$PREV_TAG"..HEAD --pretty=format:"%h %s %b")
-            fi
-            
-            # Process commits to format release notes
-            echo "$COMMITS" | while read -r line; do
-              COMMIT_HASH=$(echo "$line" | cut -d ' ' -f 1)
-              COMMIT_MSG=$(echo "$line" | cut -d ' ' -f 2-)
-              
-              # Check if this is a PR merge commit
-              if [[ "$COMMIT_MSG" =~ Merge\ pull\ request\ #([0-9]+) ]]; then
-                PR_NUM="${BASH_REMATCH[1]}"
-                # Extract the actual commit message from the merge commit
-                PR_TITLE=$(gh pr view "$PR_NUM" --json title --template "{{.title}}" 2>/dev/null || echo "")
-                
-                if [ -n "$PR_TITLE" ]; then
-                  echo "- $PR_TITLE [#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)" >> release_notes.md
-                else
-                  # Fallback if we can't get the PR title
-                  echo "- $COMMIT_MSG [#$PR_NUM](https://github.com/${{ github.repository }}/pull/$PR_NUM)" >> release_notes.md
-                fi
-              else
-                # Regular commit
-                echo "- $COMMIT_MSG" >> release_notes.md
-              fi
-            done
-            
-            RELEASE_NOTES=$(cat release_notes.md)
+          # Extract version and release type from PR body
+          PR_BODY="${{ github.event.pull_request.body }}"
+          VERSION=$(echo "$PR_BODY" | grep -oP -- "- version: \K[^\s]*" || echo "")
+          RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
+          
+          # If version is empty, try to extract from branch name
+          if [ -z "$VERSION" ] && [[ "${{ github.head_ref }}" =~ release/v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            VERSION="${BASH_REMATCH[1]}"
           fi
           
-          # Debug information
-          echo "PR Number: $PR_NUMBER"
-          echo "Head Ref: $HEAD_REF"
-          echo "Extracted Version: $VERSION"
-          echo "Release Type: $RELEASE_TYPE"
-          
-          # Output for next steps
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+          
+          # Extract release notes
+          RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
           
           # Save release notes to be used in subsequent steps
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
@@ -199,12 +45,8 @@ jobs:
           echo "EOF" >> $GITHUB_ENV
           
           echo "Processing release v$VERSION ($RELEASE_TYPE)"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      # Create the release and let GitHub handle tag creation and signing automatically
-      - name: Create GitHub Release with signed tag
-        id: create_release
+      - name: Create GitHub Release
         if: steps.extract_info.outputs.version != ''
         uses: softprops/action-gh-release@v1
         with:
@@ -214,7 +56,6 @@ jobs:
           draft: false
           generate_release_notes: false
           prerelease: ${{ steps.extract_info.outputs.release_type == 'pre-release' }}
-          # This will create the tag pointing to the latest commit on main
           target_commitish: main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
