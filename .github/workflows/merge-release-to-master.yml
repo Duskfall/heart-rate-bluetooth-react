@@ -93,8 +93,8 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             # For pull request events, extract from the PR body
             PR_BODY="${{ github.event.pull_request.body }}"
-            VERSION=$(echo "$PR_BODY" | grep -oP "- version: \K.*" || echo "")
-            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP "- release_type: \K.*" || echo "production")
+            VERSION=$(echo "$PR_BODY" | grep -oP -- "- version: \K[^\s]*" || echo "")
+            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
             
             # Extract release notes
             RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
@@ -129,7 +129,7 @@ jobs:
               PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
             fi
             
-            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP "- release_type: \K.*" || echo "production")
+            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
             
             # If version is still empty, try to extract directly from branch name
             if [ -z "$VERSION" ] && [[ "$HEAD_REF" =~ release/v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
@@ -199,7 +199,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Create tag
+      - name: Create signed tag via GitHub API
         run: |
           VERSION="${{ steps.extract_info.outputs.version }}"
           
@@ -208,18 +208,44 @@ jobs:
             exit 1
           fi
           
-          # Configure git
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          
+          TAG_NAME="v$VERSION"
           # Check if tag already exists
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "Tag v$VERSION already exists, skipping tag creation"
-          else
-            # Create and push tag
-            git tag -a "v$VERSION" -m "Release v$VERSION"
-            git push origin "v$VERSION"
+          TAG_EXISTS=$(gh api /repos/${{ github.repository }}/git/refs/tags/$TAG_NAME -s || echo "404")
+          
+          if [ "$TAG_EXISTS" != "404" ]; then
+            echo "Tag $TAG_NAME already exists, skipping tag creation"
+            exit 0
           fi
+          
+          # Get the latest commit SHA from the master branch
+          MASTER_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/master --jq '.object.sha')
+          echo "Master branch SHA: $MASTER_SHA"
+          
+          # First, create a tag object (this will be GPG signed by GitHub)
+          echo "Creating tag object..."
+          TAG_OBJECT=$(gh api \
+            --method POST \
+            /repos/${{ github.repository }}/git/tags \
+            -f tag="$TAG_NAME" \
+            -f message="Release $TAG_NAME" \
+            -f object="$MASTER_SHA" \
+            -f type="commit")
+          
+          # Extract the SHA of the new tag object
+          TAG_SHA=$(echo "$TAG_OBJECT" | jq -r '.sha')
+          echo "Tag object SHA: $TAG_SHA"
+          
+          # Then, create a reference to the tag
+          echo "Creating tag reference..."
+          gh api \
+            --method POST \
+            /repos/${{ github.repository }}/git/refs \
+            -f ref="refs/tags/$TAG_NAME" \
+            -f sha="$TAG_SHA"
+          
+          echo "Successfully created signed tag $TAG_NAME"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Create GitHub Release
         id: create_release
