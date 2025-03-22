@@ -74,25 +74,24 @@ jobs:
             echo "Current VERSION.md content:"
             echo "$EXISTING_CONTENT"
             
-            # Create temporary files for proper content handling
-            echo "# Release v$VERSION" > new_version_header.md
-            echo "" >> new_version_header.md
-            echo "This file contains the current release version of the project." >> new_version_header.md
-            echo "" >> new_version_header.md
+            # Create a file with the existing content
             echo "$EXISTING_CONTENT" > existing_content.md
             
-            # Properly concatenate files with correct line endings
-            cat new_version_header.md existing_content.md > updated_content.md
+            # APPEND the new version to the END of the file
+            echo "" >> existing_content.md
+            echo "# Release v$VERSION" >> existing_content.md
+            echo "" >> existing_content.md
+            echo "This file contains the current release version of the project." >> existing_content.md
             
-            # Base64 encode the updated content
-            ENCODED_CONTENT=$(base64 -w 0 updated_content.md)
+            # Base64 encode the appended content
+            ENCODED_CONTENT=$(base64 -w 0 existing_content.md)
             
             # Update the file with SHA
-            echo "Updating VERSION.md with properly formatted content"
+            echo "Updating VERSION.md with appended content at the end"
             gh api \
               --method PUT \
               /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
+              -f message="chore: append release v$VERSION information" \
               -f content="$ENCODED_CONTENT" \
               -f sha="$FILE_SHA" \
               -f branch="$RELEASE_BRANCH"
@@ -109,7 +108,7 @@ jobs:
             gh api \
               --method PUT \
               /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
+              -f message="chore: create VERSION.md for release v$VERSION" \
               -f content="$ENCODED_CONTENT" \
               -f branch="$RELEASE_BRANCH"
           fi
