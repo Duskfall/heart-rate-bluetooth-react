@@ -64,42 +64,83 @@ jobs:
           # Creating new version entry to append
           NEW_VERSION_ENTRY="# Release v$VERSION\n\nThis file contains the current release version of the project."
           
-          # Check if VERSION.md exists in the new branch
-          FILE_EXISTS_CODE=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
+          # First check if VERSION.md exists in the main branch to ensure compatibility
+          MAIN_FILE_EXISTS=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=main -s 2>/dev/null || echo "404")
           
-          if [ "$FILE_EXISTS_CODE" != "404" ]; then
-            # If file exists, get its content and SHA
-            echo "VERSION.md exists, retrieving content and SHA"
-            FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH)
-            FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
-            EXISTING_CONTENT=$(echo "$FILE_INFO" | jq -r '.content' | base64 -d)
+          if [ "$MAIN_FILE_EXISTS" != "404" ]; then
+            # If file exists in main, get its content
+            echo "VERSION.md exists in main branch, retrieving content for compatibility"
+            MAIN_FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=main)
+            MAIN_CONTENT=$(echo "$MAIN_FILE_INFO" | jq -r '.content' | base64 -d)
             
-            echo "Current VERSION.md content:"
-            echo "$EXISTING_CONTENT"
+            echo "Main branch VERSION.md content:"
+            echo "$MAIN_CONTENT"
             
-            # Append new version information with a separator
-            UPDATED_CONTENT="$NEW_VERSION_ENTRY\n\n=======\n\n$EXISTING_CONTENT"
-            ENCODED_CONTENT=$(echo -e "$UPDATED_CONTENT" | base64 -w 0)
+            # Now get the file in the release branch to update it
+            FILE_EXISTS_CODE=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
             
-            # Update the file with SHA
-            echo "Updating VERSION.md with appended content"
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
-              -f content="$ENCODED_CONTENT" \
-              -f sha="$FILE_SHA" \
-              -f branch="$RELEASE_BRANCH"
+            if [ "$FILE_EXISTS_CODE" != "404" ]; then
+              # If file exists in release branch, get its SHA
+              echo "VERSION.md exists in release branch, retrieving SHA"
+              FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH)
+              FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
+              
+              # Use the main branch content as base and prepend new version
+              UPDATED_CONTENT="$NEW_VERSION_ENTRY\n\n=======\n\n$MAIN_CONTENT"
+              ENCODED_CONTENT=$(echo -e "$UPDATED_CONTENT" | base64 -w 0)
+              
+              # Update the file with SHA
+              echo "Updating VERSION.md with content compatible with main branch"
+              gh api \
+                --method PUT \
+                /repos/${{ github.repository }}/contents/VERSION.md \
+                -f message="chore: prepare release v$VERSION" \
+                -f content="$ENCODED_CONTENT" \
+                -f sha="$FILE_SHA" \
+                -f branch="$RELEASE_BRANCH"
+            else
+              # Create new file with main content as base
+              echo "Creating VERSION.md in release branch based on main branch content"
+              UPDATED_CONTENT="$NEW_VERSION_ENTRY\n\n=======\n\n$MAIN_CONTENT"
+              ENCODED_CONTENT=$(echo -e "$UPDATED_CONTENT" | base64 -w 0)
+              gh api \
+                --method PUT \
+                /repos/${{ github.repository }}/contents/VERSION.md \
+                -f message="chore: prepare release v$VERSION" \
+                -f content="$ENCODED_CONTENT" \
+                -f branch="$RELEASE_BRANCH"
+            fi
           else
-            # Create new file
-            echo "Creating new VERSION.md file"
+            # If file doesn't exist in main, just create a new one
+            echo "VERSION.md does not exist in main branch, creating new file"
             ENCODED_CONTENT=$(echo -e "$NEW_VERSION_ENTRY" | base64 -w 0)
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
-              -f message="chore: prepare release v$VERSION" \
-              -f content="$ENCODED_CONTENT" \
-              -f branch="$RELEASE_BRANCH"
+            
+            # Check if it exists in the release branch
+            FILE_EXISTS_CODE=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
+            
+            if [ "$FILE_EXISTS_CODE" != "404" ]; then
+              # If exists in release but not in main, update with new content
+              echo "VERSION.md exists in release branch but not main, retrieving SHA"
+              FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH)
+              FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
+              
+              gh api \
+                --method PUT \
+                /repos/${{ github.repository }}/contents/VERSION.md \
+                -f message="chore: prepare release v$VERSION" \
+                -f content="$ENCODED_CONTENT" \
+                -f sha="$FILE_SHA" \
+                -f branch="$RELEASE_BRANCH"
+            else
+              # Create new file
+              echo "Creating new VERSION.md file"
+              gh api \
+                --method PUT \
+                /repos/${{ github.repository }}/contents/VERSION.md \
+                -f message="chore: prepare release v$VERSION" \
+                -f content="$ENCODED_CONTENT" \
+                -f branch="$RELEASE_BRANCH"
+            fi
           fi
           
           echo "Release branch $RELEASE_BRANCH created and VERSION.md added"
