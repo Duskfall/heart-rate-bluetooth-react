@@ -130,39 +130,47 @@ jobs:
         run: |
           VERSION=${{ github.event.inputs.version }}
           RELEASE_BRANCH="${{ steps.create_branch.outputs.release_branch }}"
-          
-          # Create PR to develop
-          echo "Creating PR to develop branch..."
-          DEVELOP_PR_URL=$(gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}" --web)
-          
-          # Get the PR URL from the console output or construct it
-          if [[ -z "$DEVELOP_PR_URL" ]]; then
-            # If gh command didn't return the URL directly, find PR number another way
-            DEVELOP_PR_NUMBER=$(gh pr list --head $RELEASE_BRANCH --base develop | grep "$RELEASE_BRANCH.*develop" | awk '{print $1}')
-            DEVELOP_PR_URL="https://github.com/${{ github.repository }}/pull/$DEVELOP_PR_NUMBER"
-          fi
-          echo "develop_pr_url=$DEVELOP_PR_URL" >> $GITHUB_OUTPUT
-          
-          # Create PR to master
-          echo "Creating PR to master branch..."
-          VERSION=${{ github.event.inputs.version }}
-          RELEASE_BRANCH="release/v$VERSION"
           RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           
           # Create PR to develop
+          echo "Creating PR to develop branch..."
           gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}"
           
+          # Get the PR details after creation
+          echo "Getting develop PR number..."
+          DEVELOP_PR_NUMBER=$(gh pr list --head $RELEASE_BRANCH --base develop | head -n 1 | awk '{print $1}')
+          if [[ -n "$DEVELOP_PR_NUMBER" ]]; then
+            DEVELOP_PR_URL="https://github.com/${{ github.repository }}/pull/$DEVELOP_PR_NUMBER"
+            echo "develop_pr_url=$DEVELOP_PR_URL" >> $GITHUB_OUTPUT
+            echo "Created PR to develop: $DEVELOP_PR_URL"
+          else
+            echo "Warning: Could not retrieve develop PR number or URL"
+          fi
+          
+          # Prepare master PR body - create a file with the content
+          echo "# Release v$VERSION" > master_pr_body.md
+          echo "" >> master_pr_body.md
+          cat RELEASE_NOTES.txt >> master_pr_body.md
+          echo "" >> master_pr_body.md
+          echo "---" >> master_pr_body.md
+          echo "" >> master_pr_body.md
+          echo "## Release Metadata (for automation)" >> master_pr_body.md
+          echo "- release_type: $RELEASE_TYPE" >> master_pr_body.md
+          echo "- version: $VERSION" >> master_pr_body.md
+          
           # Create PR to master with release info in the body
-          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body "
-          # Release v$VERSION
+          echo "Creating PR to master branch..."
+          gh pr create --base master --head $RELEASE_BRANCH --title "Merge release v$VERSION into master" --body-file master_pr_body.md
           
-          ${{ env.RELEASE_NOTES }}
-          
-          ---
-          
-          ## Release Metadata (for automation)
-          - release_type: $RELEASE_TYPE
-          - version: $VERSION
-          "
+          # Get the PR details after creation
+          echo "Getting master PR number..."
+          MASTER_PR_NUMBER=$(gh pr list --head $RELEASE_BRANCH --base master | head -n 1 | awk '{print $1}')
+          if [[ -n "$MASTER_PR_NUMBER" ]]; then
+            MASTER_PR_URL="https://github.com/${{ github.repository }}/pull/$MASTER_PR_NUMBER"
+            echo "master_pr_url=$MASTER_PR_URL" >> $GITHUB_OUTPUT
+            echo "Created PR to master: $MASTER_PR_URL"
+          else
+            echo "Warning: Could not retrieve master PR number or URL"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
