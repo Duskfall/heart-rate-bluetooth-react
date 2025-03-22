@@ -200,6 +200,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Create signed tag via GitHub API
+        id: create_tag
         run: |
           VERSION="${{ steps.extract_info.outputs.version }}"
           
@@ -209,8 +210,8 @@ jobs:
           fi
           
           TAG_NAME="v$VERSION"
-          # Check if tag already exists
-          TAG_EXISTS=$(gh api /repos/${{ github.repository }}/git/refs/tags/$TAG_NAME -s || echo "404")
+          # Check if tag already exists - fix the incorrect -s flag
+          TAG_EXISTS=$(gh api /repos/${{ github.repository }}/git/refs/tags/$TAG_NAME --silent 2>/dev/null || echo "404")
           
           if [ "$TAG_EXISTS" != "404" ]; then
             echo "Tag $TAG_NAME already exists, skipping tag creation"
@@ -221,49 +222,25 @@ jobs:
           MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/main --jq '.object.sha')
           echo "Main branch SHA: $MAIN_SHA"
           
-          # Create a proper annotated tag object with tagger info for verification
-          # This is crucial for the tag to show as verified in GitHub
-          echo "Creating tag object..."
-          TAG_OBJECT=$(curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/git/tags \
-            -d @- << EOF
-          {
-            "tag": "$TAG_NAME",
-            "message": "Release $TAG_NAME",
-            "object": "$MAIN_SHA",
-            "type": "commit",
-            "tagger": {
-              "name": "GitHub Actions",
-              "email": "41898282+github-actions[bot]@users.noreply.github.com",
-              "date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            }
-          }
-          EOF
-          )
+          echo "Creating tag and release using GitHub's automatic tag signing..."
           
-          # Extract the SHA of the new tag object
-          TAG_SHA=$(echo "$TAG_OBJECT" | jq -r '.sha')
-          echo "Tag object SHA: $TAG_SHA"
-          
-          # Then, create a reference to the tag
-          echo "Creating tag reference..."
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/git/refs \
-            -d '{
-              "ref": "refs/tags/'"$TAG_NAME"'",
-              "sha": "'"$TAG_SHA"'"
-            }'
+          # Use the gh release create command which automatically creates verified tags
+          gh release create "$TAG_NAME" \
+            --target main \
+            --title "Release $TAG_NAME" \
+            --notes "$RELEASE_NOTES" \
+            --verify-tag
           
           echo "Successfully created signed tag $TAG_NAME"
+          
+          # Skip the separate release creation step since we've combined it here
+          echo "skip_release=true" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Create GitHub Release
         id: create_release
+        if: steps.extract_info.outputs.version != '' && steps.create_tag.outputs.skip_release != 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.extract_info.outputs.version }}
