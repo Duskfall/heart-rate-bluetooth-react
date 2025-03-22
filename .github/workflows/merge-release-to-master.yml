@@ -24,21 +24,24 @@ jobs:
         run: |
           echo "Searching for release PRs targeting main branch..."
           
-          # List all PRs in a simple format
+          # List all OPEN PRs in a simple format
           gh pr list --base main --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
           
           if [ ! -s pr_list.txt ]; then
-            echo "No PRs found targeting main branch"
+            echo "No open PRs found targeting main branch"
             exit 0
           fi
+          
+          echo "Found the following open PRs targeting main branch:"
+          cat pr_list.txt
           
           # Process each PR
           while read PR_NUMBER HEAD_REF PR_TITLE; do
             echo "Checking PR #$PR_NUMBER: $HEAD_REF - $PR_TITLE"
             
-            # Simple grep check for release PRs
-            if [[ "$HEAD_REF" == release/* ]] || [[ "$PR_TITLE" == *release* ]]; then
-              echo "Found release PR #$PR_NUMBER"
+            # Only process release PRs with clear pattern matching
+            if [[ "$HEAD_REF" == release/* ]]; then
+              echo "Found release PR #$PR_NUMBER with branch $HEAD_REF"
               
               # Get detailed PR info for debugging
               echo "Getting PR details..."
@@ -199,48 +202,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Create signed tag via GitHub API
-        id: create_tag
-        run: |
-          VERSION="${{ steps.extract_info.outputs.version }}"
-          
-          if [ -z "$VERSION" ]; then
-            echo "No version found, cannot create tag"
-            exit 1
-          fi
-          
-          TAG_NAME="v$VERSION"
-          # Check if tag already exists - fix the incorrect -s flag
-          TAG_EXISTS=$(gh api /repos/${{ github.repository }}/git/refs/tags/$TAG_NAME --silent 2>/dev/null || echo "404")
-          
-          if [ "$TAG_EXISTS" != "404" ]; then
-            echo "Tag $TAG_NAME already exists, skipping tag creation"
-            exit 0
-          fi
-          
-          # Get the latest commit SHA from the main branch
-          MAIN_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/main --jq '.object.sha')
-          echo "Main branch SHA: $MAIN_SHA"
-          
-          echo "Creating tag and release using GitHub's automatic tag signing..."
-          
-          # Use the gh release create command which automatically creates verified tags
-          gh release create "$TAG_NAME" \
-            --target main \
-            --title "Release $TAG_NAME" \
-            --notes "$RELEASE_NOTES" \
-            --verify-tag
-          
-          echo "Successfully created signed tag $TAG_NAME"
-          
-          # Skip the separate release creation step since we've combined it here
-          echo "skip_release=true" >> $GITHUB_OUTPUT
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Create GitHub Release
+      # Create the release and let GitHub handle tag creation and signing automatically
+      - name: Create GitHub Release with signed tag
         id: create_release
-        if: steps.extract_info.outputs.version != '' && steps.create_tag.outputs.skip_release != 'true'
+        if: steps.extract_info.outputs.version != ''
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.extract_info.outputs.version }}
@@ -249,5 +214,7 @@ jobs:
           draft: false
           generate_release_notes: false
           prerelease: ${{ steps.extract_info.outputs.release_type == 'pre-release' }}
+          # This will create the tag pointing to the latest commit on main
+          target_commitish: main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
