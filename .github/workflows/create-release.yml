@@ -74,15 +74,21 @@ jobs:
             echo "Current VERSION.md content:"
             echo "$EXISTING_CONTENT"
             
-            # Create new version entry - we'll prepend this to existing content
-            NEW_VERSION_ENTRY="# Release v$VERSION\n\nThis file contains the current release version of the project.\n\n"
+            # Create temporary files for proper content handling
+            echo "# Release v$VERSION" > new_version_header.md
+            echo "" >> new_version_header.md
+            echo "This file contains the current release version of the project." >> new_version_header.md
+            echo "" >> new_version_header.md
+            echo "$EXISTING_CONTENT" > existing_content.md
             
-            # Combine the two, with new content at the beginning
-            UPDATED_CONTENT="${NEW_VERSION_ENTRY}${EXISTING_CONTENT}"
-            ENCODED_CONTENT=$(echo -e "$UPDATED_CONTENT" | base64 -w 0)
+            # Properly concatenate files with correct line endings
+            cat new_version_header.md existing_content.md > updated_content.md
+            
+            # Base64 encode the updated content
+            ENCODED_CONTENT=$(base64 -w 0 updated_content.md)
             
             # Update the file with SHA
-            echo "Updating VERSION.md with prepended content"
+            echo "Updating VERSION.md with properly formatted content"
             gh api \
               --method PUT \
               /repos/${{ github.repository }}/contents/VERSION.md \
@@ -91,10 +97,15 @@ jobs:
               -f sha="$FILE_SHA" \
               -f branch="$RELEASE_BRANCH"
           else
-            # Create new file
+            # Create new file with proper formatting
             echo "Creating new VERSION.md file"
-            NEW_CONTENT="# Release v$VERSION\n\nThis file contains the current release version of the project."
-            ENCODED_CONTENT=$(echo -e "$NEW_CONTENT" | base64 -w 0)
+            echo "# Release v$VERSION" > new_version.md
+            echo "" >> new_version.md
+            echo "This file contains the current release version of the project." >> new_version.md
+            
+            # Base64 encode content from file for consistent handling
+            ENCODED_CONTENT=$(base64 -w 0 new_version.md)
+            
             gh api \
               --method PUT \
               /repos/${{ github.repository }}/contents/VERSION.md \
