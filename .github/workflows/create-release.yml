@@ -33,163 +33,107 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up GitHub CLI
         run: |
-          echo ${{ secrets.GITHUB_TOKEN }} | gh auth login --with-token
-          gh auth status
+          gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
       
-      - name: Create release branch and VERSION.md file via API
+      - name: Create release branch and update VERSION.md
         id: create_branch
         run: |
-          VERSION=${{ github.event.inputs.version }}
+          VERSION="${{ github.event.inputs.version }}"
           RELEASE_BRANCH="release/v$VERSION"
           echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
           
-          # Get default branch and its SHA
+          # Get default branch SHA
           DEFAULT_BRANCH=$(gh api /repos/${{ github.repository }} --jq '.default_branch')
           DEFAULT_BRANCH_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/${DEFAULT_BRANCH} --jq '.object.sha')
           
-          echo "Default branch: $DEFAULT_BRANCH, SHA: $DEFAULT_BRANCH_SHA"
-          
-          # Create release branch using GitHub API
-          echo "Creating release branch $RELEASE_BRANCH"
-          gh api \
-            --method POST \
-            /repos/${{ github.repository }}/git/refs \
+          # Create release branch
+          gh api --method POST /repos/${{ github.repository }}/git/refs \
             -f ref="refs/heads/$RELEASE_BRANCH" \
             -f sha="$DEFAULT_BRANCH_SHA"
           
-          # Check if VERSION.md exists in the release branch
-          FILE_EXISTS_CODE=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
+          # Check if VERSION.md exists
+          FILE_EXISTS=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
           
-          if [ "$FILE_EXISTS_CODE" != "404" ]; then
-            # If file exists, get its content and SHA
-            echo "VERSION.md exists in release branch, retrieving content and SHA"
+          if [ "$FILE_EXISTS" != "404" ]; then
+            # Get existing content and SHA
             FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH)
             FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
             EXISTING_CONTENT=$(echo "$FILE_INFO" | jq -r '.content' | base64 -d)
             
-            echo "Current VERSION.md content:"
-            echo "$EXISTING_CONTENT"
-            
-            # Create a file with the existing content
+            # Create temporary files for proper content handling
             echo "$EXISTING_CONTENT" > existing_content.md
-            
-            # APPEND the new version to the END of the file
             echo "" >> existing_content.md
             echo "# Release v$VERSION" >> existing_content.md
             echo "" >> existing_content.md
             echo "This file contains the current release version of the project." >> existing_content.md
             
-            # Base64 encode the appended content
-            ENCODED_CONTENT=$(base64 -w 0 existing_content.md)
-            
-            # Update the file with SHA
-            echo "Updating VERSION.md with appended content at the end"
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
+            # Update file
+            gh api --method PUT /repos/${{ github.repository }}/contents/VERSION.md \
               -f message="chore: append release v$VERSION information" \
-              -f content="$ENCODED_CONTENT" \
+              -f content="$(base64 -w 0 existing_content.md)" \
               -f sha="$FILE_SHA" \
               -f branch="$RELEASE_BRANCH"
           else
-            # Create new file with proper formatting
-            echo "Creating new VERSION.md file"
+            # Create new file
             echo "# Release v$VERSION" > new_version.md
             echo "" >> new_version.md
             echo "This file contains the current release version of the project." >> new_version.md
             
-            # Base64 encode content from file for consistent handling
-            ENCODED_CONTENT=$(base64 -w 0 new_version.md)
-            
-            gh api \
-              --method PUT \
-              /repos/${{ github.repository }}/contents/VERSION.md \
+            gh api --method PUT /repos/${{ github.repository }}/contents/VERSION.md \
               -f message="chore: create VERSION.md for release v$VERSION" \
-              -f content="$ENCODED_CONTENT" \
+              -f content="$(base64 -w 0 new_version.md)" \
               -f branch="$RELEASE_BRANCH"
           fi
-          
-          echo "Release branch $RELEASE_BRANCH created and VERSION.md added"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Generate release notes
         id: release_notes
         run: |
-          VERSION=${{ github.event.inputs.version }}
+          VERSION="${{ github.event.inputs.version }}"
+          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           RELEASE_DATE=$(date +"%b %d, %Y")
           
-          # Find the most recent merge commit
-          LAST_MERGE_HASH=$(git log --merges -n 1 --format="%H")
+          # Create release notes
+          echo "# Release v$VERSION" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "Commits on $RELEASE_DATE" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
           
-          # Create custom release notes
-          {
-            echo "# Release v$VERSION"
-            echo ""
-            echo "Commits on $RELEASE_DATE"
-            
-            # Get all non-merge commits since the last merge
-            git log ${LAST_MERGE_HASH}..HEAD --no-merges --format="%s%n%an%n%an%ncommitted%n"
-          } > RELEASE_NOTES.txt
+          # Get commits since last tag or merge
+          git log --no-merges --pretty=format:"- %s" -n 20 >> RELEASE_NOTES.md
           
-          cat RELEASE_NOTES.txt
-          
-          # Save release notes to be used in subsequent steps
-          RELEASE_NOTES="$(cat RELEASE_NOTES.txt)"
+          # Save release notes content
+          RELEASE_NOTES="$(cat RELEASE_NOTES.md)"
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
-      
-      - name: Create PRs to develop and main
-        id: create_prs
-        run: |
-          VERSION=${{ github.event.inputs.version }}
-          RELEASE_BRANCH="${{ steps.create_branch.outputs.release_branch }}"
-          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           
-          # Create PR to develop
-          echo "Creating PR to develop branch..."
-          gh pr create --base develop --head $RELEASE_BRANCH --title "Merge release v$VERSION into develop" --body "${{ env.RELEASE_NOTES }}"
-          
-          # Get the PR details after creation
-          echo "Getting develop PR number..."
-          DEVELOP_PR_NUMBER=$(gh pr list --head $RELEASE_BRANCH --base develop | head -n 1 | awk '{print $1}')
-          if [[ -n "$DEVELOP_PR_NUMBER" ]]; then
-            DEVELOP_PR_URL="https://github.com/${{ github.repository }}/pull/$DEVELOP_PR_NUMBER"
-            echo "develop_pr_url=$DEVELOP_PR_URL" >> $GITHUB_OUTPUT
-            echo "Created PR to develop: $DEVELOP_PR_URL"
-          else
-            echo "Warning: Could not retrieve develop PR number or URL"
-          fi
-          
-          # Prepare main PR body - create a file with the content
-          echo "# Release v$VERSION" > main_pr_body.md
-          echo "" >> main_pr_body.md
-          cat RELEASE_NOTES.txt >> main_pr_body.md
+          # Create main PR body with metadata
+          cat RELEASE_NOTES.md > main_pr_body.md
           echo "" >> main_pr_body.md
           echo "---" >> main_pr_body.md
           echo "" >> main_pr_body.md
-          echo "## Release Metadata (for automation)" >> main_pr_body.md
+          echo "## Release Metadata" >> main_pr_body.md
           echo "- release_type: $RELEASE_TYPE" >> main_pr_body.md
           echo "- version: $VERSION" >> main_pr_body.md
+      
+      - name: Create PRs
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          RELEASE_BRANCH="${{ steps.create_branch.outputs.release_branch }}"
           
-          # Create PR to main with release info in the body
+          # Create PR to develop
+          echo "Creating PR to develop branch..."
+          gh pr create --base develop --head $RELEASE_BRANCH \
+            --title "Merge release v$VERSION into develop" \
+            --body "${{ env.RELEASE_NOTES }}"
+          
+          # Create PR to main
           echo "Creating PR to main branch..."
-          gh pr create --base main --head $RELEASE_BRANCH --title "Merge release v$VERSION into main" --body-file main_pr_body.md
-          
-          # Get the PR details after creation
-          echo "Getting main PR number..."
-          MAIN_PR_NUMBER=$(gh pr list --head $RELEASE_BRANCH --base main | head -n 1 | awk '{print $1}')
-          if [[ -n "$MAIN_PR_NUMBER" ]]; then
-            MAIN_PR_URL="https://github.com/${{ github.repository }}/pull/$MAIN_PR_NUMBER"
-            echo "main_pr_url=$MAIN_PR_URL" >> $GITHUB_OUTPUT
-            echo "Created PR to main: $MAIN_PR_URL"
-          else
-            echo "Warning: Could not retrieve main PR number or URL"
-          fi
+          gh pr create --base main --head $RELEASE_BRANCH \
+            --title "Merge release v$VERSION into main" \
+            --body-file main_pr_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
