@@ -109,8 +109,22 @@ jobs:
             VERSION=$(echo "$PR_BODY" | grep -oP -- "- version: \K[^\s]*" || echo "")
             RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
             
-            # Extract release notes
-            RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
+            # Extract release notes using gh CLI for better parsing
+            # First get PR number
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            
+            # Use gh CLI to get the PR body in markdown format
+            PR_BODY_CLEAN=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
+            
+            # Extract release notes section more reliably
+            echo "$PR_BODY_CLEAN" > pr_body.md
+            # Extract everything between the first heading and the Release Metadata heading
+            RELEASE_NOTES=$(awk '/^# Release/,/^## Release Metadata/' pr_body.md | grep -v '^## Release Metadata')
+            
+            if [ -z "$RELEASE_NOTES" ]; then
+              echo "Could not find release notes in PR body, using PR title as fallback"
+              RELEASE_NOTES="# Release v$VERSION\n\n${{ github.event.pull_request.title }}"
+            fi
           else
             # For workflow_dispatch events, extract from the merged PR
             if [ -n "$MERGED_PR_NUMBER" ] && [ -n "$MERGED_PR_HEAD_REF" ]; then
@@ -121,14 +135,21 @@ jobs:
               # Extract version from branch name
               VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
               
-              # Get PR body
+              # Get PR body and extract data using gh CLI
               PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
+              echo "$PR_BODY" > pr_body.md
               
-              # Extract release type from PR body
-              RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
+              # Extract release type
+              RELEASE_TYPE=$(grep -oP -- "- release_type: \K[^\s]*" pr_body.md || echo "production")
               
-              # Extract release notes
-              RELEASE_NOTES=$(sed -n '/# Release/,/## Release Metadata/p' <<< "$PR_BODY" | sed '/## Release Metadata/d')
+              # Extract release notes more reliably
+              RELEASE_NOTES=$(awk '/^# Release/,/^## Release Metadata/' pr_body.md | grep -v '^## Release Metadata')
+              
+              if [ -z "$RELEASE_NOTES" ]; then
+                echo "Could not find release notes in PR body, using PR title as fallback"
+                PR_TITLE=$(gh pr view $PR_NUMBER --json title --template '{{.title}}')
+                RELEASE_NOTES="# Release v$VERSION\n\n$PR_TITLE"
+              fi
             else
               # Couldn't find a merged PR, exit gracefully
               echo "No PR was merged in this run"

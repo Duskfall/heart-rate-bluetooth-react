@@ -14,8 +14,8 @@ permissions:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    # Run automatically when PR is merged or manually triggered
-    if: (github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/'))
+    # Only run if this is a merged release PR
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
     permissions:
       contents: write
       pull-requests: read
@@ -25,31 +25,35 @@ jobs:
         run: |
           gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
       
-      - name: Check PRs and delete branch - PR trigger
-        if: github.event_name == 'pull_request'
+      - name: Check and cleanup release branch
         run: |
-          # Extract branch information
+          # Get branch info
           RELEASE_BRANCH="${{ github.event.pull_request.head.ref }}"
           BASE_BRANCH="${{ github.event.pull_request.base.ref }}"
-          echo "Release branch: $RELEASE_BRANCH"
-          echo "Merged to: $BASE_BRANCH"
+          echo "Release branch: $RELEASE_BRANCH merged to $BASE_BRANCH"
           
-          # Only delete if branch has been merged to both develop and main
-          if [ "$BASE_BRANCH" = "main" ]; then
-            # Check if already merged to develop
-            DEVELOP_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:develop is:closed is:merged" --json number | jq length)
+          # Check if the branch has been merged to both develop and main
+          DEVELOP_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:develop is:closed is:merged" --json number | jq length)
+          MAIN_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:main is:closed is:merged" --json number | jq length)
+          
+          echo "Branch $RELEASE_BRANCH: Develop merges: $DEVELOP_MERGED, Main merges: $MAIN_MERGED"
+          
+          # Only delete if both PRs have been merged
+          if [ "$DEVELOP_MERGED" -gt 0 ] && [ "$MAIN_MERGED" -gt 0 ]; then
+            echo "Branch $RELEASE_BRANCH has been merged to both develop and main. Deleting..."
             
-            if [ "$DEVELOP_MERGED" -gt 0 ]; then
-              echo "Branch has been merged to both develop and main. Deleting..."
-              
-              # Delete the remote branch
-              gh api --method DELETE /repos/${{ github.repository }}/git/refs/heads/$RELEASE_BRANCH
-              echo "✅ Release branch $RELEASE_BRANCH deleted."
-            else
-              echo "⏳ Branch has only been merged to main, not deleting yet."
-            fi
+            # Delete the remote branch
+            gh api --method DELETE /repos/${{ github.repository }}/git/refs/heads/$RELEASE_BRANCH
+            echo "✅ Release branch $RELEASE_BRANCH deleted."
           else
-            echo "⏳ Branch has only been merged to develop, not deleting yet."
+            echo "⏳ Branch $RELEASE_BRANCH has not been merged to both branches yet. Skipping."
+            # Print which one is still pending
+            if [ "$DEVELOP_MERGED" -eq 0 ]; then
+              echo "Still waiting for merge to develop branch."
+            fi
+            if [ "$MAIN_MERGED" -eq 0 ]; then
+              echo "Still waiting for merge to main branch."
+            fi
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
