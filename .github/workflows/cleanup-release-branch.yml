@@ -7,19 +7,26 @@ on:
       - develop
       - main
 
+permissions:
+  contents: write
+  pull-requests: read
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    # Run automatically when PR is merged or manually triggered
+    if: (github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/'))
     permissions:
       contents: write
+      pull-requests: read
     
     steps:
       - name: Set up GitHub CLI
         run: |
           gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
       
-      - name: Check PRs and delete branch
+      - name: Check PRs and delete branch - PR trigger
+        if: github.event_name == 'pull_request'
         run: |
           # Extract branch information
           RELEASE_BRANCH="${{ github.event.pull_request.head.ref }}"

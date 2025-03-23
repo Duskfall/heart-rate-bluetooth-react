@@ -3,21 +3,32 @@ name: Merge Release to Develop
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   merge-release-pr:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      
+      - name: Set up GitHub CLI
+        run: |
+          gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
           
       - name: Find and merge release PR to develop
         run: |
           echo "Searching for release PRs targeting develop branch..."
           
-          # List all PRs in a simple format
+          # List all open PRs in a simple format
           gh pr list --base develop --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
           
           if [ ! -s pr_list.txt ]; then
@@ -25,13 +36,16 @@ jobs:
             exit 0
           fi
           
+          echo "Found the following open PRs targeting develop branch:"
+          cat pr_list.txt
+          
           # Process each PR
           while read PR_NUMBER HEAD_REF PR_TITLE; do
             echo "Checking PR #$PR_NUMBER: $HEAD_REF - $PR_TITLE"
             
-            # Simple grep check for release PRs
-            if [[ "$HEAD_REF" == release/* ]] || [[ "$PR_TITLE" == *release* ]]; then
-              echo "Found release PR #$PR_NUMBER"
+            # Only process release PRs
+            if [[ "$HEAD_REF" == release/* ]]; then
+              echo "Found release PR #$PR_NUMBER with branch $HEAD_REF"
               
               # Get detailed PR info for debugging
               echo "Getting PR details..."
