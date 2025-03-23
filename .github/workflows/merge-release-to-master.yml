@@ -109,29 +109,33 @@ jobs:
             VERSION=$(echo "$PR_BODY" | grep -oP -- "- version: \K[^\s]*" || echo "")
             RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
             
-            # Extract release notes using gh CLI for better parsing
-            # First get PR number
-            PR_NUMBER="${{ github.event.pull_request.number }}"
+            # Extract release notes from PR body - look for content between "# Release" and "Release Metadata"
+            RELEASE_BODY=$(echo "$PR_BODY" | awk '/^# Release/,/## Release Metadata/' | grep -v "## Release Metadata")
             
-            # Get the PR commits only (not all past commits)
-            echo "Getting commits specific to this PR..."
-            COMMITS=$(gh pr view $PR_NUMBER --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
-            
-            # Generate clean release notes with only PR-specific commits
-            {
-              echo "# Release v$VERSION"
-              echo ""
-              echo "Commits for release v$VERSION:"
-              echo ""
-              echo "$COMMITS" | while read -r line; do
-                # Only include non-empty lines and skip merge commits
-                if [[ -n "$line" && ! "$line" =~ ^Merge ]]; then
+            if [ -n "$RELEASE_BODY" ]; then
+              echo "$RELEASE_BODY" > release_notes.md
+              RELEASE_NOTES=$(cat release_notes.md)
+            else
+              # Fallback - get the PR commits
+              PR_NUMBER="${{ github.event.pull_request.number }}"
+              
+              # Fetch just commits in this PR
+              echo "Getting commits specific to PR #$PR_NUMBER..."
+              COMMITS=$(gh pr view $PR_NUMBER --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
+              
+              # Generate clean release notes with only PR-specific commits
+              {
+                echo "# Release v$VERSION"
+                echo ""
+                echo "## Changes"
+                echo ""
+                echo "$COMMITS" | grep -v '^$' | grep -v "^Merge " | grep -v "chore: append release v" | while read -r line; do
                   echo "- $line"
-                fi
-              done
-            } > release_notes.md
-            
-            RELEASE_NOTES=$(cat release_notes.md)
+                done
+              } > release_notes.md
+              
+              RELEASE_NOTES=$(cat release_notes.md)
+            fi
           else
             # For workflow_dispatch events, extract from the merged PR
             if [ -n "$MERGED_PR_NUMBER" ] && [ -n "$MERGED_PR_HEAD_REF" ]; then
@@ -142,27 +146,34 @@ jobs:
               # Extract version from branch name
               VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
               
-              # Get PR details
-              PR_INFO=$(gh pr view $PR_NUMBER --json commits,title --template '{"title":"{{.title}}","commits":[{{range .commits}}{"message":"{{.messageHeadline}}"},{{end}}]}' | sed 's/,]}$/]}/')
+              # Check if PR body already has release notes
+              PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
+              RELEASE_BODY=$(echo "$PR_BODY" | awk '/^# Release/,/## Release Metadata/' | grep -v "## Release Metadata")
               
-              # Extract release type
-              RELEASE_TYPE="production"
-              
-              # Generate release notes from PR commits
-              {
-                echo "# Release v$VERSION"
-                echo ""
-                echo "Commits for release v$VERSION:"
-                echo ""
-                echo "$PR_INFO" | jq -r '.commits[].message' | while read -r line; do
-                  # Only include non-empty lines and skip merge commits
-                  if [[ -n "$line" && ! "$line" =~ ^Merge ]]; then
+              if [ -n "$RELEASE_BODY" ]; then
+                echo "$RELEASE_BODY" > release_notes.md
+                RELEASE_NOTES=$(cat release_notes.md)
+              else
+                # Fallback - use PR commits
+                echo "Getting commits specific to PR #$PR_NUMBER..."
+                COMMITS=$(gh pr view $PR_NUMBER --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
+                
+                # Extract release type
+                RELEASE_TYPE="production"
+                
+                # Generate clean release notes with only PR-specific commits
+                {
+                  echo "# Release v$VERSION"
+                  echo ""
+                  echo "## Changes"
+                  echo ""
+                  echo "$COMMITS" | grep -v '^$' | grep -v "^Merge " | grep -v "chore: append release v" | while read -r line; do
                     echo "- $line"
-                  fi
-                done
-              } > release_notes.md
-              
-              RELEASE_NOTES=$(cat release_notes.md)
+                  done
+                } > release_notes.md
+                
+                RELEASE_NOTES=$(cat release_notes.md)
+              fi
             else
               # Couldn't find a merged PR, exit gracefully
               echo "No PR was merged in this run"
