@@ -9,7 +9,7 @@ on:
 
 jobs:
   create-release:
-    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/')
+    if: github.event_name != 'pull_request' || (github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
