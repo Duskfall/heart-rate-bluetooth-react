@@ -26,3 +26,7 @@ This file contains the current release version of the project.
 # Release v1.0.12
 
 This file contains the current release version of the project.
+
+# Release v1.0.13
+
+This file contains the current release version of the project.
