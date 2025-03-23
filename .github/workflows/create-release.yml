@@ -98,11 +98,43 @@ jobs:
           # Create release notes
           echo "# Release v$VERSION" > RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
-          echo "Commits on $RELEASE_DATE" >> RELEASE_NOTES.md
+          echo "## Changes" >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
           
-          # Get commits since last tag or merge
-          git log --no-merges --pretty=format:"- %s" -n 20 >> RELEASE_NOTES.md
+          # Fetch all tags and branches to ensure we have full history
+          git fetch --tags --force
+          git fetch origin develop main
+          
+          # Try to find the latest release tag
+          LATEST_TAG=$(git tag --sort=-v:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || echo "")
+          
+          # If no tag found, check for latest release branch merged to main
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No release tag found, checking for latest release branch merged to main..."
+            LATEST_RELEASE_COMMIT=$(git log --grep="Merge pull request.*from.*release/v" --merges -n 1 --format="%H" main || echo "")
+            if [ -n "$LATEST_RELEASE_COMMIT" ]; then
+              echo "Using latest release branch merge commit as reference: $LATEST_RELEASE_COMMIT"
+              REFERENCE_POINT="$LATEST_RELEASE_COMMIT"
+            else
+              # If all else fails, just use the last 10 commits
+              echo "No previous release found, using limited commit history"
+              REFERENCE_POINT="HEAD~10"
+            fi
+          else
+            echo "Using latest tag as reference point: $LATEST_TAG"
+            REFERENCE_POINT="$LATEST_TAG"
+          fi
+          
+          # Get the commits since the reference point
+          echo "Fetching commits since $REFERENCE_POINT..."
+          RELEASE_COMMITS=$(git log --no-merges "$REFERENCE_POINT..develop" --pretty=format:"- %s" | grep -v "chore: append release v" || echo "")
+          
+          # If we have commits, add them to the release notes
+          if [ -n "$RELEASE_COMMITS" ]; then
+            echo "$RELEASE_COMMITS" >> RELEASE_NOTES.md
+          else
+            echo "- No specific changes found for this release" >> RELEASE_NOTES.md
+          fi
           
           # Save release notes content
           RELEASE_NOTES="$(cat RELEASE_NOTES.md)"
