@@ -15,7 +15,6 @@ on:
           - production
           - pre-release
 
-# Make sure permissions are correctly set at the top level
 permissions:
   contents: write
   pull-requests: write
@@ -23,7 +22,6 @@ permissions:
 jobs:
   create-release:
     runs-on: ubuntu-latest
-    # Also set permissions explicitly at the job level
     permissions:
       contents: write
       pull-requests: write
@@ -45,46 +43,48 @@ jobs:
           RELEASE_BRANCH="release/v$VERSION"
           echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
           
-          # Get default branch SHA
+          # Get the default branch and its latest commit SHA
           DEFAULT_BRANCH=$(gh api /repos/${{ github.repository }} --jq '.default_branch')
           DEFAULT_BRANCH_SHA=$(gh api /repos/${{ github.repository }}/git/refs/heads/${DEFAULT_BRANCH} --jq '.object.sha')
           
-          # Create release branch
+          # Create the release branch from the default branch commit SHA
           gh api --method POST /repos/${{ github.repository }}/git/refs \
             -f ref="refs/heads/$RELEASE_BRANCH" \
             -f sha="$DEFAULT_BRANCH_SHA"
           
-          # Check if VERSION.md exists
-          FILE_EXISTS=$(gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -s || echo $?)
-          
-          if [ "$FILE_EXISTS" != "404" ]; then
+          # Check if VERSION.md already exists on the new release branch
+          if gh api -X HEAD /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH -q 'true' 2>/dev/null; then
             # Get existing content and SHA
             FILE_INFO=$(gh api /repos/${{ github.repository }}/contents/VERSION.md?ref=$RELEASE_BRANCH)
             FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
             EXISTING_CONTENT=$(echo "$FILE_INFO" | jq -r '.content' | base64 -d)
             
-            # Create temporary files for proper content handling
-            echo "$EXISTING_CONTENT" > existing_content.md
-            echo "" >> existing_content.md
-            echo "# Release v$VERSION" >> existing_content.md
-            echo "" >> existing_content.md
-            echo "This file contains the current release version of the project." >> existing_content.md
+            # Append new release info to existing content
+            {
+              echo "$EXISTING_CONTENT"
+              echo ""
+              echo "# Release v$VERSION"
+              echo ""
+              echo "This file contains the current release version of the project."
+            } > updated_VERSION.md
             
-            # Update file
+            # Update VERSION.md
             gh api --method PUT /repos/${{ github.repository }}/contents/VERSION.md \
               -f message="chore: append release v$VERSION information" \
-              -f content="$(base64 -w 0 existing_content.md)" \
+              -f content="$(base64 -w 0 updated_VERSION.md)" \
               -f sha="$FILE_SHA" \
               -f branch="$RELEASE_BRANCH"
           else
-            # Create new file
-            echo "# Release v$VERSION" > new_version.md
-            echo "" >> new_version.md
-            echo "This file contains the current release version of the project." >> new_version.md
+            # Create a new VERSION.md file
+            {
+              echo "# Release v$VERSION"
+              echo ""
+              echo "This file contains the current release version of the project."
+            } > new_VERSION.md
             
             gh api --method PUT /repos/${{ github.repository }}/contents/VERSION.md \
               -f message="chore: create VERSION.md for release v$VERSION" \
-              -f content="$(base64 -w 0 new_version.md)" \
+              -f content="$(base64 -w 0 new_VERSION.md)" \
               -f branch="$RELEASE_BRANCH"
           fi
       
@@ -95,77 +95,61 @@ jobs:
           RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           RELEASE_DATE=$(date +"%b %d, %Y")
           
-          # Create release notes
-          echo "# Release v$VERSION" > RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "## Changes" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
+          # Start release notes file
+          {
+            echo "# Release v$VERSION"
+            echo ""
+            echo "## Changes"
+            echo ""
+          } > RELEASE_NOTES.md
           
-          # Fetch all tags and branches to ensure we have full history
-          git fetch --tags --force
-          git fetch origin develop main
-          
-          # Try to find the latest release tag
+          # Determine reference point from latest release tag (if any)
           LATEST_TAG=$(git tag --sort=-v:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || echo "")
-          
-          # If no tag found, check for latest release branch merged to main
           if [ -z "$LATEST_TAG" ]; then
-            echo "No release tag found, checking for latest release branch merged to main..."
-            LATEST_RELEASE_COMMIT=$(git log --grep="Merge pull request.*from.*release/v" --merges -n 1 --format="%H" main || echo "")
-            if [ -n "$LATEST_RELEASE_COMMIT" ]; then
-              echo "Using latest release branch merge commit as reference: $LATEST_RELEASE_COMMIT"
-              REFERENCE_POINT="$LATEST_RELEASE_COMMIT"
-            else
-              # If all else fails, just use the last 10 commits
-              echo "No previous release found, using limited commit history"
-              REFERENCE_POINT="HEAD~10"
-            fi
+            echo "No release tag found; using the last 10 commits as reference."
+            REFERENCE_POINT="HEAD~10"
           else
             echo "Using latest tag as reference point: $LATEST_TAG"
             REFERENCE_POINT="$LATEST_TAG"
           fi
           
-          # Get the commits since the reference point
-          echo "Fetching commits since $REFERENCE_POINT..."
-          RELEASE_COMMITS=$(git log --no-merges "$REFERENCE_POINT..develop" --pretty=format:"- %s" | grep -v "chore: append release v" || echo "")
+          # Retrieve commit messages from the develop branch since the reference point
+          RELEASE_COMMITS=$(git log --no-merges "$REFERENCE_POINT..develop" --pretty=format:"- %s" | grep -v "chore: append release v" || true)
           
-          # If we have commits, add them to the release notes
           if [ -n "$RELEASE_COMMITS" ]; then
             echo "$RELEASE_COMMITS" >> RELEASE_NOTES.md
           else
             echo "- No specific changes found for this release" >> RELEASE_NOTES.md
           fi
           
-          # Save release notes content
-          RELEASE_NOTES="$(cat RELEASE_NOTES.md)"
+          # Export release notes for use in PR creation
+          RELEASE_NOTES_CONTENT=$(cat RELEASE_NOTES.md)
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "$RELEASE_NOTES" >> $GITHUB_ENV
+          echo "$RELEASE_NOTES_CONTENT" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
           
-          # Create main PR body with metadata
-          cat RELEASE_NOTES.md > main_pr_body.md
-          echo "" >> main_pr_body.md
-          echo "---" >> main_pr_body.md
-          echo "" >> main_pr_body.md
-          echo "## Release Metadata" >> main_pr_body.md
-          echo "- release_type: $RELEASE_TYPE" >> main_pr_body.md
-          echo "- version: $VERSION" >> main_pr_body.md
+          # Build the PR body for the main branch with metadata
+          {
+            cat RELEASE_NOTES.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Release Metadata"
+            echo "- release_type: $RELEASE_TYPE"
+            echo "- version: $VERSION"
+          } > main_pr_body.md
       
       - name: Create PRs
         run: |
           VERSION="${{ github.event.inputs.version }}"
           RELEASE_BRANCH="${{ steps.create_branch.outputs.release_branch }}"
           
-          # Create PR to develop
-          echo "Creating PR to develop branch..."
-          gh pr create --base develop --head $RELEASE_BRANCH \
+          # Create a pull request to the develop branch
+          gh pr create --base develop --head "$RELEASE_BRANCH" \
             --title "Merge release v$VERSION into develop" \
             --body "${{ env.RELEASE_NOTES }}"
           
-          # Create PR to main
-          echo "Creating PR to main branch..."
-          gh pr create --base main --head $RELEASE_BRANCH \
+          # Create a pull request to the main branch with additional metadata
+          gh pr create --base main --head "$RELEASE_BRANCH" \
             --title "Merge release v$VERSION into main" \
             --body-file main_pr_body.md
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
