@@ -101,10 +101,6 @@ jobs:
           echo "## Changes" >> RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
           
-          # Fetch all tags and branches to ensure we have full history
-          git fetch --tags --force
-          git fetch origin develop main
-          
           # Try to find the latest release tag
           LATEST_TAG=$(git tag --sort=-v:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+" | head -n1 || echo "")
           

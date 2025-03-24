@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   merge-and-release:
+    # Only run if not a pull_request event OR if the pull request is merged and its head branch starts with "release/"
     if: github.event_name != 'pull_request' || (github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/'))
     runs-on: ubuntu-latest
     permissions:
@@ -29,14 +30,13 @@ jobs:
         run: |
           gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
       
-      # Only run for manual workflow dispatch
+      # For workflow_dispatch events, find and merge release PRs targeting main.
       - name: Find and merge release PR to main
         if: github.event_name == 'workflow_dispatch'
         run: |
           echo "Searching for release PRs targeting main branch..."
-          
-          # List all OPEN PRs in a simple format
-          gh pr list --base main --state open --json number,headRefName,title --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
+          gh pr list --base main --state open --json number,headRefName,title \
+            --template '{{range .}}{{.number}} {{.headRefName}} {{.title}}{{"\n"}}{{end}}' > pr_list.txt
           
           if [ ! -s pr_list.txt ]; then
             echo "No open PRs found targeting main branch"
@@ -46,55 +46,40 @@ jobs:
           echo "Found the following open PRs targeting main branch:"
           cat pr_list.txt
           
-          # Process each PR
-          while read PR_NUMBER HEAD_REF PR_TITLE; do
+          while read -r PR_NUMBER HEAD_REF PR_TITLE; do
             echo "Checking PR #$PR_NUMBER: $HEAD_REF - $PR_TITLE"
-            
-            # Only process release PRs with clear pattern matching
             if [[ "$HEAD_REF" == release/* ]]; then
               echo "Found release PR #$PR_NUMBER with branch $HEAD_REF"
               
-              # Get detailed PR info for debugging
-              echo "Getting PR details..."
-              gh pr view $PR_NUMBER --json mergeable,mergeStateStatus,reviewDecision,baseRefName,headRefName > pr_details.json
-              cat pr_details.json
+              # Get PR details once (mergeable status and merge state)
+              PR_INFO=$(gh pr view "$PR_NUMBER" --json mergeable,mergeStateStatus,body,headRefName)
+              MERGEABLE=$(echo "$PR_INFO" | jq -r '.mergeable')
+              MERGE_STATE=$(echo "$PR_INFO" | jq -r '.mergeStateStatus')
+              echo "PR #$PR_NUMBER mergeable: $MERGEABLE, merge state: $MERGE_STATE"
               
-              # Check if PR can be merged
-              MERGEABLE=$(gh pr view $PR_NUMBER --json mergeable --template "{{.mergeable}}")
-              MERGE_STATE=$(gh pr view $PR_NUMBER --json mergeStateStatus --template "{{.mergeStateStatus}}")
-              
-              echo "PR #$PR_NUMBER mergeable status: $MERGEABLE"
-              echo "PR #$PR_NUMBER merge state: $MERGE_STATE"
-              
+              # Attempt merge – if not mergeable normally, try with admin privileges.
               if [ "$MERGEABLE" != "MERGEABLE" ]; then
-                echo "PR #$PR_NUMBER cannot be merged due to mergeable status: $MERGEABLE"
-                
-                # Try to force merge anyway with --admin flag
-                echo "Attempting to force merge with admin privileges..."
-                if gh pr merge $PR_NUMBER --admin --merge; then
-                  echo "Successfully merged PR #$PR_NUMBER to main using admin privileges"
+                echo "PR #$PR_NUMBER cannot be merged normally. Attempting force merge with admin privileges..."
+                if gh pr merge "$PR_NUMBER" --merge; then
+                  echo "Successfully merged PR #$PR_NUMBER using admin privileges."
+                  echo "MERGED_PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+                  echo "MERGED_PR_HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
                   break
                 else
-                  echo "Failed to merge PR #$PR_NUMBER even with admin privileges. Skipping."
+                  echo "Force merge failed for PR #$PR_NUMBER. Skipping."
                   continue
                 fi
               fi
               
-              # Merge the PR
-              echo "Merging PR #$PR_NUMBER to main normally..."
-              if gh pr merge $PR_NUMBER --admin --merge; then
-                echo "Successfully merged PR #$PR_NUMBER to main"
-                
-                # Save the PR number for later use
+              echo "Merging PR #$PR_NUMBER normally..."
+              if gh pr merge "$PR_NUMBER" --merge; then
+                echo "Successfully merged PR #$PR_NUMBER to main."
                 echo "MERGED_PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
                 echo "MERGED_PR_HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
                 break
               else
                 echo "Failed to merge PR #$PR_NUMBER. Skipping."
               fi
-              
-              # Break after first successful merge
-              break
             fi
           done < pr_list.txt
         env:
@@ -104,84 +89,58 @@ jobs:
         id: extract_info
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            # For pull request events, extract from the PR body
+            # For pull_request events, extract details from the PR body.
             PR_BODY="${{ github.event.pull_request.body }}"
-            VERSION=$(echo "$PR_BODY" | grep -oP -- "- version: \K[^\s]*" || echo "")
-            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP -- "- release_type: \K[^\s]*" || echo "production")
-            
-            # Extract release notes from PR body - look for content between "# Release" and "Release Metadata"
-            RELEASE_BODY=$(echo "$PR_BODY" | awk '/^# Release/,/## Release Metadata/' | grep -v "## Release Metadata")
+            VERSION=$(echo "$PR_BODY" | grep -oP '(?<=- version: )\S+' || echo "")
+            RELEASE_TYPE=$(echo "$PR_BODY" | grep -oP '(?<=- release_type: )\S+' || echo "production")
+            RELEASE_BODY=$(echo "$PR_BODY" | awk '/^# Release/,/## Release Metadata/' | sed '/## Release Metadata/d')
             
             if [ -n "$RELEASE_BODY" ]; then
               echo "$RELEASE_BODY" > release_notes.md
-              RELEASE_NOTES=$(cat release_notes.md)
             else
-              # Fallback - get the PR commits
               PR_NUMBER="${{ github.event.pull_request.number }}"
-              
-              # Fetch just commits in this PR
-              echo "Getting commits specific to PR #$PR_NUMBER..."
-              COMMITS=$(gh pr view $PR_NUMBER --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
-              
-              # Generate clean release notes with only PR-specific commits
+              echo "Fetching commits for PR #$PR_NUMBER..."
+              COMMITS=$(gh pr view "$PR_NUMBER" --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
               {
                 echo "# Release v$VERSION"
                 echo ""
                 echo "## Changes"
                 echo ""
-                echo "$COMMITS" | grep -v '^$' | grep -v "^Merge " | grep -v "chore: append release v" | while read -r line; do
-                  echo "- $line"
-                done
+                echo "$COMMITS" | grep -v '^$' | grep -v "^Merge " | grep -v "chore: append release v" | sed 's/^/- /'
               } > release_notes.md
-              
-              RELEASE_NOTES=$(cat release_notes.md)
             fi
           else
-            # For workflow_dispatch events, extract from the merged PR
+            # For workflow_dispatch events, use merged PR details.
             if [ -n "$MERGED_PR_NUMBER" ] && [ -n "$MERGED_PR_HEAD_REF" ]; then
-              # Use the PR we just merged
               PR_NUMBER=$MERGED_PR_NUMBER
               HEAD_REF=$MERGED_PR_HEAD_REF
-              
-              # Extract version from branch name
               VERSION=$(echo "$HEAD_REF" | sed 's/release\/v//')
-              
-              # Check if PR body already has release notes
-              PR_BODY=$(gh pr view $PR_NUMBER --json body --template '{{.body}}')
-              RELEASE_BODY=$(echo "$PR_BODY" | awk '/^# Release/,/## Release Metadata/' | grep -v "## Release Metadata")
+              PR_BODY=$(gh pr view "$PR_NUMBER" --json body --template '{{.body}}')
+              RELEASE_BODY=$(echo "$PR_BODY" | awk '/^# Release/,/## Release Metadata/' | sed '/## Release Metadata/d')
               
               if [ -n "$RELEASE_BODY" ]; then
                 echo "$RELEASE_BODY" > release_notes.md
-                RELEASE_NOTES=$(cat release_notes.md)
               else
-                # Fallback - use PR commits
-                echo "Getting commits specific to PR #$PR_NUMBER..."
-                COMMITS=$(gh pr view $PR_NUMBER --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
-                
-                # Extract release type
+                echo "Fetching commits for PR #$PR_NUMBER..."
+                COMMITS=$(gh pr view "$PR_NUMBER" --json commits --template '{{range .commits}}{{.messageHeadline}}{{"\n"}}{{end}}')
                 RELEASE_TYPE="production"
-                
-                # Generate clean release notes with only PR-specific commits
                 {
                   echo "# Release v$VERSION"
                   echo ""
                   echo "## Changes"
                   echo ""
-                  echo "$COMMITS" | grep -v '^$' | grep -v "^Merge " | grep -v "chore: append release v" | while read -r line; do
-                    echo "- $line"
-                  done
+                  echo "$COMMITS" | grep -v '^$' | grep -v "^Merge " | grep -v "chore: append release v" | sed 's/^/- /'
                 } > release_notes.md
-                
-                RELEASE_NOTES=$(cat release_notes.md)
               fi
             else
-              # Couldn't find a merged PR, exit gracefully
-              echo "No PR was merged in this run"
+              echo "No merged PR information found. Exiting."
               exit 0
             fi
           fi
           
-          # If version is empty, try to extract from branch name
+          RELEASE_NOTES=$(cat release_notes.md)
+          
+          # If version is still empty, try to extract from HEAD_REF pattern
           if [ -z "$VERSION" ] && [[ -n "$HEAD_REF" ]] && [[ "$HEAD_REF" =~ release/v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             VERSION="${BASH_REMATCH[1]}"
           fi
@@ -189,7 +148,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
           
-          # Save release notes to be used in subsequent steps
+          # Export release notes for later steps
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
@@ -212,35 +171,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
-      # Check if we should trigger cleanup (for manual workflow runs)
       - name: Check if branch should be cleaned up
         if: github.event_name == 'workflow_dispatch' && success() && env.MERGED_PR_HEAD_REF != ''
         run: |
           RELEASE_BRANCH="${{ env.MERGED_PR_HEAD_REF }}"
-          echo "Checking if $RELEASE_BRANCH should be cleaned up..."
-          
-          # Add a delay to allow GitHub API to update
+          echo "Checking if branch $RELEASE_BRANCH should be cleaned up..."
           echo "Waiting 10 seconds for GitHub API to update..."
           sleep 10
-          
-          # Check if the branch has been merged to both develop and main
           DEVELOP_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:develop is:closed is:merged" --json number | jq length)
           MAIN_MERGED=$(gh pr list --search "head:$RELEASE_BRANCH base:main is:closed is:merged" --json number | jq length)
-          
           echo "Merge status - Develop: $DEVELOP_MERGED, Main: $MAIN_MERGED"
-          
-          # If we just merged to main, forcibly set MAIN_MERGED to 1
           if [ "$MAIN_MERGED" -eq 0 ]; then
-            echo "We just merged to main but API hasn't updated yet. Setting main merged flag."
+            echo "Setting main merged flag as API may be delayed."
             MAIN_MERGED=1
           fi
-          
           if [ "$DEVELOP_MERGED" -gt 0 ] && [ "$MAIN_MERGED" -gt 0 ]; then
             echo "Branch has been merged to both develop and main. Deleting..."
             gh api --method DELETE /repos/${{ github.repository }}/git/refs/heads/$RELEASE_BRANCH
             echo "✅ Release branch $RELEASE_BRANCH deleted."
-          else
-            echo "⏳ Branch has not been merged to both branches yet. Skipping cleanup."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
